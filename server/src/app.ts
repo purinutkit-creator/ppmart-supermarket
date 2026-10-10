@@ -16,6 +16,7 @@ import { purchasingRouter } from './routes/purchasing';
 import { reportsRouter } from './routes/reports';
 import { adminRouter } from './routes/admin';
 import { shopRouter, ordersRouter } from './routes/shop';
+import { storefrontsRouter } from './routes/storefronts';
 
 export function createApp() {
   const app = express();
@@ -66,6 +67,7 @@ export function createApp() {
   app.use('/api/admin', adminRouter);
   app.use('/api/shop', shopRouter);
   app.use('/api/orders', ordersRouter);
+  app.use('/api/storefronts', storefrontsRouter);
   app.use('/api', (_req, _res, next) => next(notFound('API not found')));
 
   // Serve the built web app (production)

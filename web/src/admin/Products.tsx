@@ -102,7 +102,7 @@ export default function Products() {
       )}
       {tab === 'meta' && (
         <div className="grid g3">
-          <MetaList title="หมวดหมู่" path="categories" rows={cats ?? []} reload={rc} extra={['nameEn', 'nameZh']} />
+          <MetaList title="หมวดหมู่" path="categories" rows={cats ?? []} reload={rc} extra={['nameEn', 'nameZh']} parents />
           <MetaList title="แบรนด์" path="brands" rows={brands ?? []} reload={rb} />
           <MetaList title="หน่วยนับ" path="units" rows={units ?? []} reload={ru} extra={['nameEn']} />
         </div>
@@ -122,6 +122,7 @@ export default function Products() {
             <Field label="หน่วยนับ"><select className="in" value={edit.unitId ?? ''} onChange={(e) => setEdit({ ...edit, unitId: e.target.value || null })}><option value="">-</option>{units?.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></Field>
             <Field label="ราคาขาย"><MoneyInput value={edit.price} onChange={(v) => setEdit({ ...edit, price: v ?? 0 })} /></Field>
             <Field label="ราคาทุน"><MoneyInput value={edit.cost} onChange={(v) => setEdit({ ...edit, cost: v ?? 0 })} /></Field>
+            <Field label="ราคาก่อนลด (ขีดฆ่า/ป้าย SALE บนเว็บ)"><MoneyInput value={edit.comparePrice} onChange={(v) => setEdit({ ...edit, comparePrice: v })} placeholder="ไม่ลดราคา" /></Field>
             <Field label="ราคาสมาชิก"><MoneyInput value={edit.memberPrice} onChange={(v) => setEdit({ ...edit, memberPrice: v })} /></Field>
             <Field label="ราคาส่ง"><MoneyInput value={edit.wholesalePrice} onChange={(v) => setEdit({ ...edit, wholesalePrice: v })} /></Field>
             <Field label="ราคาส่งเมื่อซื้อขั้นต่ำ (ชิ้น)"><input className="in" type="number" value={edit.wholesaleMinQty ?? ''} onChange={(e) => setEdit({ ...edit, wholesaleMinQty: e.target.value })} /></Field>
@@ -169,9 +170,11 @@ export default function Products() {
   );
 }
 
-function MetaList({ title, path, rows, reload, extra = [] }: { title: string; path: string; rows: any[]; reload: () => void; extra?: string[] }) {
+function MetaList({ title, path, rows, reload, extra = [], parents }: { title: string; path: string; rows: any[]; reload: () => void; extra?: string[]; parents?: boolean }) {
   const toast = useToast();
   const [name, setName] = useState('');
+  const [parentId, setParentId] = useState('');
+  const nameOf = (id: number) => rows.find((r) => r.id === id)?.name;
   const [ex, setEx] = useState<Record<string, string>>({});
   return (
     <div className="card">
@@ -179,10 +182,11 @@ function MetaList({ title, path, rows, reload, extra = [] }: { title: string; pa
       <div className="grid" style={{ gap: 6 }}>
         <input className="in" placeholder="ชื่อ" value={name} onChange={(e) => setName(e.target.value)} />
         {extra.map((k) => <input key={k} className="in" placeholder={k} value={ex[k] ?? ''} onChange={(e) => setEx({ ...ex, [k]: e.target.value })} />)}
-        <button className="btn sm primary" disabled={!name} onClick={async () => { try { await api(`/api/products/meta/${path}`, { body: { name, ...ex } }); setName(''); setEx({}); reload(); } catch (e) { toast(errMsg(e), 'err'); } }}>+ เพิ่ม</button>
+        {parents && <select className="in" value={parentId} onChange={(e) => setParentId(e.target.value)}><option value="">— หมวดหลัก (ไม่มีหมวดแม่) —</option>{rows.filter((r) => !r.parent_id).map((r) => <option key={r.id} value={r.id}>หมวดย่อยของ: {r.name}</option>)}</select>}
+        <button className="btn sm primary" disabled={!name} onClick={async () => { try { await api(`/api/products/meta/${path}`, { body: { name, ...ex, ...(parents ? { parentId: parentId ? Number(parentId) : null } : {}) } }); setName(''); setEx({}); setParentId(''); reload(); } catch (e) { toast(errMsg(e), 'err'); } }}>+ เพิ่ม</button>
       </div>
       <table className="t" style={{ marginTop: 8 }}><tbody>
-        {rows.map((r) => <tr key={r.id}><td>{r.name}<div className="xs muted">{[r.name_en, r.name_zh].filter(Boolean).join(' · ')}</div></td><td className="right"><button className="btn sm ghost" onClick={async () => { try { await api(`/api/products/meta/${path}/${r.id}`, { method: 'DELETE' }); reload(); } catch (e) { toast(errMsg(e), 'err'); } }}>ลบ</button></td></tr>)}
+        {rows.map((r) => <tr key={r.id}><td>{r.parent_id ? <span className="muted">{nameOf(r.parent_id)} › </span> : null}{r.name}<div className="xs muted">{[r.name_en, r.name_zh].filter(Boolean).join(' · ')}</div></td><td className="right"><button className="btn sm ghost" onClick={async () => { try { await api(`/api/products/meta/${path}/${r.id}`, { method: 'DELETE' }); reload(); } catch (e) { toast(errMsg(e), 'err'); } }}>ลบ</button></td></tr>)}
       </tbody></table>
     </div>
   );

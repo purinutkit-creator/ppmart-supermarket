@@ -2,13 +2,13 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { setup, uuid } from './helpers';
 
 let env: Awaited<ReturnType<typeof setup>>;
-let manager: string;
+let manager: string, owner: string;
 let parentId: number;
 const sizes: Record<string, number> = {};
 // 1x1 transparent PNG
 const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
 
-const order = (items: { productId: number; qty: number }[], extra: any = {}) => env.api('POST', '/api/shop/orders', {
+const order = (items: { productId: number; qty: number }[], extra: any = {}, store = 'main') => env.api('POST', `/api/shop/s/${store}/orders`, {
   idempotencyKey: uuid(), items, customer: { name: 'ลูกค้าออนไลน์', phone: '0899999999' }, fulfillment: 'pickup', paymentMethod: 'pay_at_store', ...extra,
 });
 const stock = async (id: number) => Number((await env.pool.query('SELECT COALESCE((SELECT qty FROM stock_levels WHERE branch_id=1 AND product_id=$1),0) AS q', [id])).rows[0].q);
@@ -16,6 +16,7 @@ const stock = async (id: number) => Number((await env.pool.query('SELECT COALESC
 beforeAll(async () => {
   env = await setup();
   manager = await env.login('2000', '246802', 'POS01');
+  owner = await env.login('1000', '135790');
   const p = await env.api('POST', '/api/products', {
     sku: 'TS-001', name: 'เสื้อยืด', price: 19900, cost: 8000, description: 'ผ้าฝ้าย 100%',
     sizeChart: { columns: ['ไซส์', 'อก (นิ้ว)'], rows: [['S', '34'], ['M', '38']], note: null },
@@ -37,7 +38,7 @@ describe('online shop', () => {
     const b = await env.api('POST', `/api/products/${parentId}/images`, { dataBase64: PNG, mime: 'image/png' }, manager);
     expect(a.status).toBe(200); expect(b.status).toBe(200);
     expect((await env.api('PUT', `/api/products/${parentId}/images/order`, { ids: [b.body.id, a.body.id] }, manager)).status).toBe(200);
-    const d = await env.api('GET', `/api/shop/products/${parentId}`);
+    const d = await env.api('GET', `/api/shop/s/main/products/${parentId}`);
     expect(d.body.imageIds).toEqual([b.body.id, a.body.id]);
     expect(d.body.imageUrl).toBe(`/api/shop/images/${b.body.id}`);
     expect(d.body.sizeChart.rows.length).toBe(2);
@@ -45,7 +46,7 @@ describe('online shop', () => {
     const img = await fetch(`http://127.0.0.1:${(env.server.address() as any).port}/api/shop/images/${a.body.id}`);
     expect(img.headers.get('content-type')).toBe('image/png');
     // sized products are listed once (parent), never the individual sizes
-    const list = await env.api('GET', '/api/shop/products?q=เสื้อยืด');
+    const list = await env.api('GET', '/api/shop/s/main/products?q=เสื้อยืด');
     expect(list.body.items.length).toBe(1);
     expect([list.body.items[0].price, list.body.items[0].maxPrice, list.body.items[0].hasSizes]).toEqual([19900, 21900, true]);
   });
@@ -98,5 +99,32 @@ describe('online shop', () => {
     const b = await order([{ productId: sizes.M, qty: 1 }], { idempotencyKey: key });
     expect(a.status).toBe(201);
     expect(b.body.code).toBe('DUPLICATE_ORDER');
+  });
+
+  it('multiple storefronts: own scope, own branch, can be closed independently', async () => {
+    const cat = (await env.api('POST', '/api/products/meta/categories', { name: 'ฟุตบอล' }, manager)).body;
+    const catId = cat.id ?? (await env.pool.query("SELECT id FROM categories WHERE name='ฟุตบอล'")).rows[0].id;
+    await env.pool.query('UPDATE products SET category_id=$1, compare_price=29900 WHERE id=$2 OR parent_id=$2', [catId, parentId]);
+    const c = await env.api('POST', '/api/storefronts', { slug: 'football', name: 'PP Football', config: { scope: { mode: 'categories', categoryIds: [catId], brandIds: [] } } }, owner);
+    expect(c.status).toBe(200);
+    const list = await env.api('GET', '/api/shop/s/football/products');
+    expect(list.body.items.map((x: any) => x.id)).toEqual([parentId]);
+    expect(list.body.items[0].comparePrice).toBe(29900);
+    expect(list.body.facets.sizes).toContain('M');
+    expect((await env.api('GET', '/api/shop/s/football/products?tag=sale')).body.total).toBe(1);
+    expect((await env.api('GET', '/api/shop/s/football/products?size=XL')).body.total).toBe(0);
+    // a product outside the store's scope cannot be ordered there
+    const other = (await env.pool.query("SELECT id FROM products WHERE sku='RC-001'")).rows[0].id;
+    expect((await order([{ productId: other, qty: 1 }], {}, 'football')).body.code).toBe('NOT_AVAILABLE');
+    const info = await env.api('GET', '/api/shop/s/football/info');
+    expect(info.body.categories.map((x: any) => x.name)).toEqual(['ฟุตบอล']);
+    const stores = (await env.api('GET', '/api/shop/stores')).body.stores.map((x: any) => x.slug);
+    expect(stores).toEqual(['main', 'football']);
+    // close only the football store
+    await env.api('PUT', `/api/storefronts/${c.body.id}`, { slug: 'football', name: 'PP Football', enabled: false, config: {} }, owner);
+    expect((await env.api('GET', '/api/shop/s/football/info')).body.code).toBe('SHOP_CLOSED');
+    expect((await order([{ productId: sizes.M, qty: 1 }], {}, 'football')).body.code).toBe('SHOP_CLOSED');
+    expect((await env.api('GET', '/api/shop/stores')).body.stores.map((x: any) => x.slug)).toEqual(['main']);
+    expect((await env.api('GET', '/api/shop/s/main/info')).status).toBe(200);
   });
 });

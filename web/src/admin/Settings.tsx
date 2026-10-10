@@ -19,7 +19,7 @@ export default function Settings() {
   return (
     <div className="grid" style={{ gap: '1rem' }}>
       <div className="page-head"><h1>ตั้งค่าระบบ</h1></div>
-      <div className="tabs">{[['store', 'ร้านค้า'], ['tax', 'ภาษี'], ['pos', 'POS'], ['branches', 'สาขาและเครื่อง POS'], ['fonts', 'ฟอนต์'], ['display', 'Customer Display'], ['shop', '🛒 เว็บไซต์สั่งของ'], ['receipt', 'การพิมพ์ใบเสร็จ'], ['backup', 'สำรอง/กู้คืนข้อมูล']].map(([k, l]) => <button key={k} className={tab === k ? 'on' : ''} onClick={() => setTab(k)}>{l}</button>)}</div>
+      <div className="tabs">{[['store', 'ร้านค้า'], ['tax', 'ภาษี'], ['pos', 'POS'], ['branches', 'สาขาและเครื่อง POS'], ['fonts', 'ฟอนต์'], ['display', 'Customer Display'], ['receipt', 'การพิมพ์ใบเสร็จ'], ['backup', 'สำรอง/กู้คืนข้อมูล']].map(([k, l]) => <button key={k} className={tab === k ? 'on' : ''} onClick={() => setTab(k)}>{l}</button>)}</div>
 
       {tab === 'store' && (
         <div className="card grid g3">
@@ -72,7 +72,6 @@ export default function Settings() {
           <div><button className="btn primary" onClick={() => save('display')}>บันทึก</button></div>
         </div>
       )}
-      {tab === 'shop' && <ShopSettings s={s} up={up} onSave={() => save('shop')} />}
       {tab === 'receipt' && (
         <div className="card grid g3">
           <Field label="ลำดับการพิมพ์"><select className="in" value={s.receipt.printOrder.join(',')} onChange={(e) => up('receipt', { printOrder: e.target.value.split(',') })}><option value="summary,customer">ใบสรุปยอด → ใบลูกค้า</option><option value="customer,summary">ใบลูกค้า → ใบสรุปยอด</option></select></Field>
@@ -188,33 +187,3 @@ function Backup() {
   );
 }
 
-function ShopSettings({ s, up, onSave }: { s: any; up: (k: string, patch: any) => void; onSave: () => void }) {
-  const { data: branches } = useApi<any[]>('/api/admin/branches');
-  const sh = s.shop;
-  const pay = (patch: any) => up('shop', { payments: { ...sh.payments, ...patch } });
-  const url = `${location.origin}/shop`;
-  return (
-    <div className="card grid g3">
-      <div style={{ gridColumn: '1/-1' }} className="row between">
-        <label className="check"><input type="checkbox" checked={sh.enabled} onChange={(e) => up('shop', { enabled: e.target.checked })} /> <b>เปิดรับคำสั่งซื้อออนไลน์</b></label>
-        <span className="small">ลิงก์หน้าร้าน: <a href={url} target="_blank" rel="noreferrer">{url}</a></span>
-      </div>
-      <Field label="ชื่อหน้าร้าน"><input className="in" value={sh.title ?? ''} onChange={(e) => up('shop', { title: e.target.value })} /></Field>
-      <Field label="สาขาที่ตัดสต็อก / ให้รับสินค้า"><select className="in" value={sh.branchId ?? ''} onChange={(e) => up('shop', { branchId: e.target.value ? Number(e.target.value) : null })}><option value="">สาขาแรก (ค่าเริ่มต้น)</option>{branches?.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}</select></Field>
-      <Field label="ประกาศบนหน้าร้าน"><input className="in" value={sh.announcement ?? ''} onChange={(e) => up('shop', { announcement: e.target.value })} placeholder="เช่น ส่งฟรีเมื่อซื้อครบ 500 บาท" /></Field>
-      <div><b className="small">การรับสินค้า</b>
-        <label className="check"><input type="checkbox" checked={sh.pickup} onChange={(e) => up('shop', { pickup: e.target.checked })} /> รับที่ร้าน</label>
-        <label className="check"><input type="checkbox" checked={sh.delivery} onChange={(e) => up('shop', { delivery: e.target.checked })} /> จัดส่ง</label></div>
-      <Field label="ค่าจัดส่ง (บาท)"><input className="in" type="number" min={0} value={(sh.deliveryFee ?? 0) / 100} onChange={(e) => up('shop', { deliveryFee: Math.round(Number(e.target.value) * 100) })} /></Field>
-      <Field label="ส่งฟรีเมื่อซื้อครบ (บาท, 0 = ไม่มี)"><input className="in" type="number" min={0} value={(sh.freeDeliveryMin ?? 0) / 100} onChange={(e) => up('shop', { freeDeliveryMin: Math.round(Number(e.target.value) * 100) })} /></Field>
-      <Field label="ยอดสั่งซื้อขั้นต่ำ (บาท)"><input className="in" type="number" min={0} value={(sh.minOrder ?? 0) / 100} onChange={(e) => up('shop', { minOrder: Math.round(Number(e.target.value) * 100) })} /></Field>
-      <div><b className="small">วิธีชำระเงิน</b>
-        <label className="check"><input type="checkbox" checked={sh.payments?.promptpay} onChange={(e) => pay({ promptpay: e.target.checked })} /> พร้อมเพย์ QR</label>
-        <label className="check"><input type="checkbox" checked={sh.payments?.payAtStore} onChange={(e) => pay({ payAtStore: e.target.checked })} /> ชำระที่ร้าน (รับที่ร้าน)</label>
-        <label className="check"><input type="checkbox" checked={sh.payments?.cod} onChange={(e) => pay({ cod: e.target.checked })} /> เก็บเงินปลายทาง (จัดส่ง)</label></div>
-      <Field label="ยกเลิกออเดอร์พร้อมเพย์ที่ไม่ชำระภายใน (นาที)"><input className="in" type="number" min={5} value={sh.paymentTimeoutMinutes} onChange={(e) => up('shop', { paymentTimeoutMinutes: Number(e.target.value) })} /></Field>
-      <p className="xs muted" style={{ gridColumn: '1/-1' }}>สินค้าทั้งหมดที่เปิดขายและติ๊ก “แสดงในเว็บไซต์สั่งของ” จะแสดงบนหน้าร้าน · ตั้งค่ารูปหลายรูป ไซส์ และตารางไซส์ได้ที่เมนูสินค้า · สต็อกถูกจองทันทีเมื่อสั่งซื้อ และคืนอัตโนมัติเมื่อยกเลิก/หมดเวลาชำระ · พร้อมเพย์ยืนยันอัตโนมัติเมื่อตั้งค่า Omise มิฉะนั้นพนักงานยืนยันยอดที่เมนูออเดอร์ออนไลน์</p>
-      <div><button className="btn primary" onClick={onSave}>บันทึก</button></div>
-    </div>
-  );
-}

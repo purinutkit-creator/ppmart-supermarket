@@ -23,6 +23,7 @@ const productSchema = z.object({
   price: money,
   cost: money.optional().default(0),
   memberPrice: money.nullable().optional(),
+  comparePrice: money.nullable().optional(),
   wholesalePrice: money.nullable().optional(),
   wholesaleMinQty: z.number().nullable().optional(),
   isWeighted: z.boolean().optional().default(false),
@@ -169,13 +170,13 @@ async function saveBarcodes(db: any, productId: number, barcodes: z.infer<typeof
 
 const cols = (p: z.infer<typeof productSchema>) => [p.sku, p.name, p.nameEn ?? null, p.nameZh ?? null, p.categoryId ?? null, p.brandId ?? null, p.unitId ?? null,
   p.price, p.cost, p.memberPrice ?? null, p.wholesalePrice ?? null, p.wholesaleMinQty ?? null, p.isWeighted, p.trackStock, p.vatExempt, p.isActive,
-  p.saleBlocked, p.blockReason ?? null, p.minStock, p.imageUrl ?? null, p.description ?? null, p.online, p.sizeChart ? JSON.stringify(p.sizeChart) : null];
+  p.saleBlocked, p.blockReason ?? null, p.minStock, p.imageUrl ?? null, p.description ?? null, p.online, p.sizeChart ? JSON.stringify(p.sizeChart) : null, p.comparePrice ?? null];
 
 productsRouter.post('/', requirePerm('products.manage'), async (req, res) => {
   const p = parse(productSchema, req.body);
   const id = await tx(async (db) => {
     const r = (await db.query(`INSERT INTO products (sku,name,name_en,name_zh,category_id,brand_id,unit_id,price,cost,member_price,wholesale_price,wholesale_min_qty,
-      is_weighted,track_stock,vat_exempt,is_active,sale_blocked,block_reason,min_stock,image_url,description,online,size_chart) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23) RETURNING id`, cols(p))).rows[0];
+      is_weighted,track_stock,vat_exempt,is_active,sale_blocked,block_reason,min_stock,image_url,description,online,size_chart,compare_price) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24) RETURNING id`, cols(p))).rows[0];
     await saveBarcodes(db, r.id, p.barcodes);
     await audit({ staffId: req.staff!.id, staffName: req.staff!.name, action: 'product.create', entity: 'product', entityId: r.id, details: { sku: p.sku, price: p.price } }, db);
     return r.id;
@@ -192,8 +193,8 @@ productsRouter.put('/:id', requirePerm('products.manage'), async (req, res) => {
     if (!before) throw notFound();
     await db.query(`UPDATE products SET sku=$1,name=$2,name_en=$3,name_zh=$4,category_id=$5,brand_id=$6,unit_id=$7,price=$8,cost=$9,member_price=$10,wholesale_price=$11,
       wholesale_min_qty=$12,is_weighted=$13,track_stock=$14,vat_exempt=$15,is_active=$16,sale_blocked=$17,block_reason=$18,min_stock=$19,
-      image_url=COALESCE((SELECT '/api/shop/images/'||pi.id FROM product_images pi WHERE pi.product_id=$24 ORDER BY pi.sort_order, pi.id LIMIT 1), $20),
-      description=$21,online=$22,size_chart=$23,updated_at=now() WHERE id=$24`, [...cols(p), id]);
+      image_url=COALESCE((SELECT '/api/shop/images/'||pi.id FROM product_images pi WHERE pi.product_id=$25 ORDER BY pi.sort_order, pi.id LIMIT 1), $20),
+      description=$21,online=$22,size_chart=$23,compare_price=$24,updated_at=now() WHERE id=$25`, [...cols(p), id]);
     await saveBarcodes(db, id, p.barcodes);
     await audit({ staffId: req.staff!.id, staffName: req.staff!.name, action: 'product.update', entity: 'product', entityId: id, details: { before, after: { price: p.price, cost: p.cost, memberPrice: p.memberPrice, saleBlocked: p.saleBlocked } } }, db);
   });
@@ -281,8 +282,8 @@ for (const [path, table, extra] of [['categories', 'categories', ['name_en', 'na
     const fields = ['name', ...extra];
     const vals = fields.map((f) => (b as any)[f.replace(/_(\w)/g, (_, c) => c.toUpperCase())] ?? (b as any)[f] ?? null);
     if (b.id) await pool.query(`UPDATE ${table} SET ${fields.map((f, i) => `${f}=$${i + 1}`).join(',')} WHERE id=$${fields.length + 1}`, [...vals, b.id]);
-    else await pool.query(`INSERT INTO ${table} (${fields.join(',')}) VALUES (${fields.map((_, i) => '$' + (i + 1)).join(',')})`, vals);
-    res.json({ ok: true });
+    const id = b.id ?? (await one(`INSERT INTO ${table} (${fields.join(',')}) VALUES (${fields.map((_, i) => '$' + (i + 1)).join(',')}) RETURNING id`, vals)).id;
+    res.json({ ok: true, id });
   });
   productsRouter.delete(`/meta/${path}/:id`, requirePerm('products.manage'), async (req, res) => {
     await pool.query(`DELETE FROM ${table} WHERE id=$1`, [String(req.params.id)]);

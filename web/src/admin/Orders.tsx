@@ -14,8 +14,10 @@ const FILTERS: [string, string][] = [['active', 'ต้องดำเนิน�
 export default function Orders() {
   const [filter, setFilter] = useState('active');
   const [q, setQ] = useState('');
+  const [store, setStore] = useState('');
+  const { data: stores } = useApi<any[]>('/api/storefronts');
   const status = filter === 'active' ? 'pending_payment,paid,preparing,ready,shipped' : filter;
-  const { data, reload } = useApi<any[]>(`/api/orders?status=${status}&q=${encodeURIComponent(q)}`, [status, q]);
+  const { data, reload } = useApi<any[]>(`/api/orders?status=${status}&q=${encodeURIComponent(q)}&store=${store}`, [status, q, store]);
   const [sel, setSel] = useState<number | null>(null);
   useEffect(() => adminBus.ws?.on('shop.order', () => reload()), [reload]);
   return (
@@ -23,13 +25,14 @@ export default function Orders() {
       <div className="page-head"><h1>ออเดอร์ออนไลน์</h1><a className="btn" href="/shop" target="_blank" rel="noreferrer">🌐 เปิดหน้าร้านออนไลน์</a></div>
       <div className="row">
         <div className="tabs" style={{ margin: 0 }}>{FILTERS.map(([k, l]) => <button key={k} className={filter === k ? 'on' : ''} onClick={() => setFilter(k)}>{l}</button>)}</div>
+        {(stores?.length ?? 0) > 1 && <select className="in" style={{ width: 180 }} value={store} onChange={(e) => setStore(e.target.value)}><option value="">ทุกร้าน</option>{stores!.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select>}
         <input className="in" style={{ maxWidth: 260 }} placeholder="ค้นหาเลขออเดอร์ / ชื่อ / เบอร์" value={q} onChange={(e) => setQ(e.target.value)} />
       </div>
       <div className="table-wrap"><table className="t">
         <thead><tr><th>เลขที่</th><th>เวลา</th><th>ลูกค้า</th><th>รับสินค้า</th><th>ชำระ</th><th className="right">ยอด</th><th>สถานะ</th></tr></thead>
         <tbody>{(data ?? []).map((o) => (
           <tr key={o.id} style={{ cursor: 'pointer' }} onClick={() => setSel(o.id)}>
-            <td className="mono small"><b>{o.order_no}</b></td><td className="small">{fmtDate(o.created_at)}</td>
+            <td className="mono small"><b>{o.order_no}</b>{o.store_name && <div className="xs muted" style={{ fontFamily: 'inherit' }}>{o.store_name}</div>}</td><td className="small">{fmtDate(o.created_at)}</td>
             <td>{o.customer_name}<div className="xs muted">{o.customer_phone}{o.member_name ? ` · สมาชิก ${o.member_name}` : ''}</div></td>
             <td>{o.fulfillment === 'pickup' ? '🏪 รับที่ร้าน' : '🚚 จัดส่ง'}</td>
             <td className="small">{PAY[o.payment_method]}{o.payment_status === 'needs_review' && <span className="badge needs_review" style={{ marginLeft: 4 }}>มีสลิป</span>}</td>

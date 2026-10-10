@@ -5,9 +5,9 @@ import { useToast, errMsg, MoneyInput } from '../components/ui';
 import { fmtQty } from '../lib/format';
 
 /** Downscale on the client so uploads stay small (longest side ≤ 1600px, WebP/JPEG). */
-async function prepareImage(file: File): Promise<{ dataBase64: string; mime: string; width: number; height: number }> {
+export async function prepareImage(file: File, maxSide = 1600): Promise<{ dataBase64: string; mime: string; width: number; height: number }> {
   const bmp = await createImageBitmap(file);
-  const scale = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
+  const scale = Math.min(1, maxSide / Math.max(bmp.width, bmp.height));
   const w = Math.max(1, Math.round(bmp.width * scale)), h = Math.max(1, Math.round(bmp.height * scale));
   const c = document.createElement('canvas');
   c.width = w; c.height = h;

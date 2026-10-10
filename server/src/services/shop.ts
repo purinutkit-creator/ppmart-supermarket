@@ -12,10 +12,59 @@ import { broadcastStaff } from '../realtime';
 
 export interface ShopItemInput { productId: number; qty: number }
 
-export async function shopSettings(db: Db = pool) {
-  const s = await getSetting('shop', db);
-  const branchId: number = s.branchId ?? (await one('SELECT id FROM branches WHERE is_active ORDER BY id LIMIT 1', [], db))!.id;
-  return { ...s, branchId };
+/** Defaults for a storefront's config (stored as JSONB, merged on read). */
+export const STORE_DEFAULTS = {
+  tagline: '', logoMediaId: null as number | null,
+  theme: { primary: '#111111', accent: '#e11d48' },
+  announcements: [] as string[],
+  banners: [] as { mediaId: number; mobileMediaId?: number | null; title?: string; subtitle?: string; buttonText?: string; link?: string }[],
+  scope: { mode: 'all' as 'all' | 'categories' | 'brands', categoryIds: [] as number[], brandIds: [] as number[] },
+  home: { showCategories: true, showNew: true, showSale: true, showBest: true, showBrands: true, newDays: 30 },
+  pickup: true, delivery: true, deliveryFee: 4000, freeDeliveryMin: 50000, minOrder: 0,
+  payments: { promptpay: true, payAtStore: true, cod: false }, paymentTimeoutMinutes: 30,
+  contact: { phone: '', line: '', facebook: '', instagram: '', tiktok: '', email: '', address: '' },
+  locationBranchIds: [] as number[], shippingInfo: '', returnInfo: '', footerText: '',
+};
+export type Store = typeof STORE_DEFAULTS & { id: number; slug: string; name: string; enabled: boolean; branchId: number; branchIdRaw: number | null; sortOrder: number };
+
+export function mergeStore(row: any, firstBranchId: number): Store {
+  const c = row.config || {};
+  const d = STORE_DEFAULTS;
+  return {
+    ...d, ...c,
+    theme: { ...d.theme, ...(c.theme || {}) }, scope: { ...d.scope, ...(c.scope || {}) }, home: { ...d.home, ...(c.home || {}) },
+    payments: { ...d.payments, ...(c.payments || {}) }, contact: { ...d.contact, ...(c.contact || {}) },
+    id: row.id, slug: row.slug, name: row.name, enabled: row.enabled, branchIdRaw: row.branch_id, branchId: row.branch_id ?? firstBranchId, sortOrder: row.sort_order,
+  };
+}
+
+async function firstBranch(db: Db) {
+  return (await one('SELECT id FROM branches WHERE is_active ORDER BY id LIMIT 1', [], db))!.id as number;
+}
+
+/** Load a storefront by slug or id. Disabled stores are hidden from the public unless allowDisabled. */
+export async function loadStore(key: string | number, db: Db = pool, opts: { allowDisabled?: boolean } = {}): Promise<Store> {
+  const row = await one(typeof key === 'number' ? 'SELECT * FROM storefronts WHERE id=$1' : 'SELECT * FROM storefronts WHERE slug=$1', [key], db);
+  if (!row) throw notFound('ไม่พบร้านค้านี้');
+  if (!row.enabled && !opts.allowDisabled) throw conflict('ร้านค้าออนไลน์นี้ปิดให้บริการชั่วคราว', 'SHOP_CLOSED');
+  return mergeStore(row, await firstBranch(db));
+}
+
+/** Category ids in the store's scope (selected categories + all their sub-categories), or null = all. */
+export async function scopeCategoryIds(st: Store, db: Db = pool): Promise<number[] | null> {
+  if (st.scope.mode !== 'categories') return null;
+  const cats = (await db.query('SELECT id, parent_id FROM categories')).rows;
+  const out = new Set<number>(st.scope.categoryIds);
+  let grew = true;
+  while (grew) { grew = false; for (const c of cats) if (c.parent_id && out.has(c.parent_id) && !out.has(c.id)) { out.add(c.id); grew = true; } }
+  return [...out];
+}
+
+/** SQL condition (on alias) limiting products to the store's scope; pushes its params. */
+export async function scopeSql(st: Store, alias: string, params: any[], db: Db = pool) {
+  if (st.scope.mode === 'categories') { params.push(await scopeCategoryIds(st, db)); return ` AND ${alias}.category_id = ANY($${params.length}::int[])`; }
+  if (st.scope.mode === 'brands') { params.push(st.scope.brandIds); return ` AND ${alias}.brand_id = ANY($${params.length}::int[])`; }
+  return '';
 }
 
 /** Members can sign in on the shop with their member-site session (member prices + points). */
@@ -26,9 +75,9 @@ export async function memberFromToken(token?: string | null, db: Db = pool) {
 }
 
 /** Server-side pricing of a shop cart (same engine as the POS). Throws on unavailable products. */
-export async function priceShopCart(items: ShopItemInput[], member: any | null, fulfillment: 'pickup' | 'delivery', db: Db = pool) {
+export async function priceShopCart(items: ShopItemInput[], member: any | null, fulfillment: 'pickup' | 'delivery', shop: Store, db: Db = pool) {
   if (!items.length) throw bad('ตะกร้าว่าง');
-  const shop = await shopSettings(db);
+  const scopeCats = await scopeCategoryIds(shop, db);
   const tax = await getSetting('tax', db);
   const store = await getSetting('store', db);
   const ids = [...new Set(items.map((i) => i.productId))];
@@ -38,7 +87,8 @@ export async function priceShopCart(items: ShopItemInput[], member: any | null, 
   const products = new Map<number, PricingProduct>();
   for (const i of items) {
     const r = byId.get(i.productId);
-    if (!r || !r.is_active || !r.online || r.sale_blocked) throw conflict(`สินค้า #${i.productId} ไม่พร้อมขายออนไลน์`, 'NOT_AVAILABLE', { productId: i.productId });
+    const outOfScope = r && ((scopeCats && !scopeCats.includes(r.category_id)) || (shop.scope.mode === 'brands' && !shop.scope.brandIds.includes(r.brand_id)));
+    if (!r || !r.is_active || !r.online || r.sale_blocked || outOfScope) throw conflict(`สินค้า #${i.productId} ไม่พร้อมขายออนไลน์`, 'NOT_AVAILABLE', { productId: i.productId });
     if (Number(r.variant_count) > 0) throw bad(`กรุณาเลือกไซส์ของ ${r.name}`, 'SIZE_REQUIRED');
     if (!r.is_weighted && !Number.isInteger(i.qty)) throw bad('จำนวนต้องเป็นจำนวนเต็ม');
     products.set(r.id, rowToPricingProduct(r));
@@ -55,13 +105,12 @@ export async function priceShopCart(items: ShopItemInput[], member: any | null, 
 }
 
 export async function createOrder(input: {
-  idempotencyKey: string; items: ShopItemInput[]; customer: { name: string; phone: string; email?: string | null };
+  store: string; idempotencyKey: string; items: ShopItemInput[]; customer: { name: string; phone: string; email?: string | null };
   fulfillment: 'pickup' | 'delivery'; address?: string | null; note?: string | null; paymentMethod: 'promptpay' | 'pay_at_store' | 'cod'; memberToken?: string | null;
 }) {
   const dup = await one('SELECT order_no FROM online_orders WHERE idempotency_key=$1', [input.idempotencyKey]);
   if (dup) throw conflict('ส่งคำสั่งซื้อนี้ไปแล้ว', 'DUPLICATE_ORDER', { orderNo: dup.order_no });
-  const shop = await shopSettings();
-  if (!shop.enabled) throw conflict('ร้านค้าออนไลน์ปิดให้บริการชั่วคราว', 'SHOP_CLOSED');
+  const shop = await loadStore(input.store);
   if (input.fulfillment === 'pickup' && !shop.pickup) throw bad('ไม่รองรับการรับที่ร้าน');
   if (input.fulfillment === 'delivery' && !shop.delivery) throw bad('ไม่รองรับการจัดส่ง');
   if (input.fulfillment === 'delivery' && !(input.address && input.address.trim().length > 10)) throw bad('กรุณากรอกที่อยู่จัดส่งให้ครบถ้วน');
@@ -73,7 +122,7 @@ export async function createOrder(input: {
   const accessToken = randomToken(18);
 
   const order = await tx(async (db) => {
-    const { priced, shipping, total, rows } = await priceShopCart(input.items, member, input.fulfillment, db);
+    const { priced, shipping, total, rows } = await priceShopCart(input.items, member, input.fulfillment, shop, db);
     if (shop.minOrder && priced.total < shop.minOrder) throw bad(`ยอดสั่งซื้อขั้นต่ำ ${(shop.minOrder / 100).toFixed(2)} บาท`, 'MIN_ORDER');
     let orderNo = '';
     for (let i = 0; i < 5 && !orderNo; i++) {
@@ -82,10 +131,10 @@ export async function createOrder(input: {
     }
     const o = (await db.query(
       `INSERT INTO online_orders (order_no, access_token_hash, idempotency_key, member_id, branch_id, customer_name, customer_phone, customer_email, fulfillment, address, note,
-        payment_method, subtotal, discount_total, shipping_fee, total)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING *`,
+        payment_method, subtotal, discount_total, shipping_fee, total, storefront_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING *`,
       [orderNo, sha256(accessToken), input.idempotencyKey, member?.id ?? null, shop.branchId, input.customer.name, input.customer.phone, input.customer.email || null,
-       input.fulfillment, input.fulfillment === 'delivery' ? input.address : null, input.note || null, input.paymentMethod, priced.subtotal, priced.discountTotal, shipping, total])).rows[0];
+       input.fulfillment, input.fulfillment === 'delivery' ? input.address : null, input.note || null, input.paymentMethod, priced.subtotal, priced.discountTotal, shipping, total, shop.id])).rows[0];
     // stock is taken at order time (row-locked, never oversells) and returned if the order is cancelled
     for (const l of [...priced.lines].sort((a, b) => a.productId - b.productId)) {
       const r = rows.get(l.productId);
@@ -100,7 +149,7 @@ export async function createOrder(input: {
     }
     return o;
   });
-  broadcastStaff('shop.order', { orderNo: order.order_no, total: order.total, status: order.status });
+  broadcastStaff('shop.order', { orderNo: order.order_no, total: order.total, status: order.status, store: shop.name });
   broadcastStaff('stock.changed', { productIds: input.items.map((i) => i.productId), branchId: order.branch_id });
   return { orderNo: order.order_no, accessToken };
 }
@@ -117,11 +166,12 @@ export async function publicOrder(o: any, db: Db = pool) {
   const items = (await db.query('SELECT product_id, name, variant_label, qty, unit_price, discount, line_total FROM online_order_items WHERE order_id=$1 ORDER BY id', [o.id])).rows;
   const it = o.payment_intent_id ? (await db.query('SELECT id, status, qr_payload, qr_image_url, amount FROM payment_intents WHERE id=$1', [o.payment_intent_id])).rows[0] : null;
   const branch = (await db.query('SELECT name, address, phone FROM branches WHERE id=$1', [o.branch_id])).rows[0];
+  const store = o.storefront_id ? (await db.query('SELECT slug, name FROM storefronts WHERE id=$1', [o.storefront_id])).rows[0] : null;
   return {
     orderNo: o.order_no, status: o.status, createdAt: o.created_at, paidAt: o.paid_at, fulfillment: o.fulfillment, address: o.address, note: o.note,
     customer: { name: o.customer_name, phone: o.customer_phone.replace(/^(\d{3})\d+(\d{3})$/, '$1-xxx-$2') }, paymentMethod: o.payment_method,
     subtotal: Number(o.subtotal), discount: Number(o.discount_total), shipping: Number(o.shipping_fee), total: Number(o.total), trackingNo: o.tracking_no,
-    cancelledReason: o.cancelled_reason, branch, items,
+    cancelledReason: o.cancelled_reason, branch, items, store,
     payment: it ? { status: it.status, qrPayload: it.qr_payload, qrImageUrl: it.qr_image_url, amount: Number(it.amount) } : null,
   };
 }
@@ -218,15 +268,15 @@ export async function setOrderStatus(orderId: number, to: string, staff: { id: n
   });
 }
 
-/** Housekeeping: cancel PromptPay orders that were never paid (returns stock). */
+/** Housekeeping: cancel PromptPay orders that were never paid within their store's time limit (returns stock). */
 export async function expireUnpaidOrders() {
-  const shop = await shopSettings();
-  const mins = Number(shop.paymentTimeoutMinutes || 30);
-  const rows = (await pool.query(`SELECT o.id FROM online_orders o LEFT JOIN payment_intents pi ON pi.id=o.payment_intent_id
-    WHERE o.status='pending_payment' AND o.payment_method='promptpay' AND o.created_at < now() - ($1 || ' minutes')::interval
-      AND (pi.status IS NULL OR pi.status NOT IN ('paid','needs_review'))`, [String(mins)])).rows;
-  for (const r of rows) await setOrderStatus(r.id, 'cancelled', { id: 0, name: 'system' }, { reason: 'หมดเวลาชำระเงิน' }).catch((e) => console.error('[shop expire]', e.message));
-  return rows.length;
+  const rows = (await pool.query(`SELECT o.id, o.created_at, s.config FROM online_orders o LEFT JOIN payment_intents pi ON pi.id=o.payment_intent_id
+    LEFT JOIN storefronts s ON s.id=o.storefront_id
+    WHERE o.status='pending_payment' AND o.payment_method='promptpay' AND o.created_at < now() - interval '5 minutes'
+      AND (pi.status IS NULL OR pi.status NOT IN ('paid','needs_review'))`)).rows;
+  const due = rows.filter((r) => Date.now() - new Date(r.created_at).getTime() > Math.max(5, Number(r.config?.paymentTimeoutMinutes || 30)) * 60_000);
+  for (const r of due) await setOrderStatus(r.id, 'cancelled', { id: 0, name: 'system' }, { reason: 'หมดเวลาชำระเงิน' }).catch((e) => console.error('[shop expire]', e.message));
+  return due.length;
 }
 
 export { sha256 as hashToken };

@@ -25,12 +25,13 @@ const ReceiptDesigner = lazy(() => import('./ReceiptDesigner'));
 const Devices = lazy(() => import('./Devices'));
 const Audit = lazy(() => import('./Audit'));
 const Orders = lazy(() => import('./Orders'));
+const Storefronts = lazy(() => import('./Storefronts'));
 
 export const adminBus = { ws: null as RealtimeClient | null };
 
 const NAV: { grp: string; items: [string, string, string | null][] }[] = [
   { grp: 'ภาพรวม', items: [['/admin', '📊 Dashboard', 'reports.view'], ['/admin/reports', '📈 รายงาน', 'reports.view']] },
-  { grp: 'ขาย', items: [['/pos', '🛒 หน้าขาย POS', 'pos.sell'], ['/admin/orders', '🌐 ออเดอร์ออนไลน์', 'orders.manage'], ['/admin/payments', '💳 ตรวจสอบการชำระเงิน', 'payments.verify'], ['/admin/shifts', '⏱ กะแคชเชียร์', 'shifts.view_all']] },
+  { grp: 'ขาย', items: [['/pos', '🛒 หน้าขาย POS', 'pos.sell'], ['/admin/orders', '🌐 ออเดอร์ออนไลน์', 'orders.manage'], ['/admin/storefronts', '🏪 ร้านค้าออนไลน์', 'settings.manage'], ['/admin/payments', '💳 ตรวจสอบการชำระเงิน', 'payments.verify'], ['/admin/shifts', '⏱ กะแคชเชียร์', 'shifts.view_all']] },
   { grp: 'สินค้า', items: [['/admin/products', '📦 สินค้า', 'products.manage'], ['/admin/stock', '🏬 สต็อก', 'stock.view'], ['/admin/purchasing', '🚚 จัดซื้อ', 'purchasing.manage']] },
   { grp: 'การตลาด', items: [['/admin/members', '👥 สมาชิก', 'members.manage'], ['/admin/promotions', '🏷 โปรโมชั่น', 'promotions.manage'], ['/admin/coupons', '🎟 Receipt Coupon', 'coupons.manage']] },
   { grp: 'ระบบ', items: [['/admin/staff', '🧑‍💼 พนักงานและสิทธิ์', 'staff.manage'], ['/admin/settings', '⚙️ ตั้งค่า', 'settings.manage'], ['/admin/receipt-designer', '🧾 ออกแบบใบเสร็จ', 'settings.manage'], ['/admin/devices', '🔌 อุปกรณ์', null], ['/admin/audit', '📜 Activity Log', 'audit.view']] },
@@ -53,7 +54,7 @@ export default function AdminApp() {
     const off = ws.on('_unauthorized', () => { setSession(null); nav('/login'); });
     // new online-shop order notification on every back-office page
     const offOrder = ws.on('shop.order', (m: any) => {
-      if (m?.orderNo && m.status === 'pending_payment' && m.total != null && (can('orders.manage') || can('payments.verify'))) toast(`🛒 ออเดอร์ออนไลน์ใหม่ ${m.orderNo} ${fmtMoney(m.total)}`, 'ok');
+      if (m?.orderNo && m.status === 'pending_payment' && m.total != null && (can('orders.manage') || can('payments.verify'))) toast(`🛒 ออเดอร์ออนไลน์ใหม่${m.store ? ` (${m.store})` : ''} ${m.orderNo} ${fmtMoney(m.total)}`, 'ok');
     });
     return () => { off(); offOrder(); ws.close(); };
   }, []); // eslint-disable-line
@@ -96,6 +97,7 @@ export default function AdminApp() {
             <Route path="devices" element={<Devices />} />
             <Route path="audit" element={<Audit />} />
             <Route path="orders" element={<Orders />} />
+            <Route path="storefronts" element={<Storefronts />} />
           </Routes>
         </Suspense>
       </main>

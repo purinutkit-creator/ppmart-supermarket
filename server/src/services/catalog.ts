@@ -33,6 +33,6 @@ export function productPublic(r: any) {
     isActive: r.is_active, saleBlocked: r.sale_blocked, blockReason: r.block_reason, minStock: r.min_stock, imageUrl: r.image_url,
     barcodes: r.barcodes ?? [], stock: r.stock ?? null, categoryName: r.category_name ?? null, brandName: r.brand_name ?? null,
     description: r.description ?? null, online: r.online ?? true, parentId: r.parent_id ?? null, variantLabel: r.variant_label ?? null,
-    variantSort: r.variant_sort ?? 0, sizeChart: r.size_chart ?? null, imageIds: r.image_ids ?? [], variantCount: Number(r.variant_count ?? 0),
+    variantSort: r.variant_sort ?? 0, sizeChart: r.size_chart ?? null, comparePrice: r.compare_price ?? null, imageIds: r.image_ids ?? [], variantCount: Number(r.variant_count ?? 0),
   };
 }
