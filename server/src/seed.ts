@@ -27,8 +27,8 @@ export async function seed() {
     const roles: [string, string, string[], number][] = [
       ['owner', 'Owner', [...ALL_PERMISSIONS], 100],
       ['admin', 'Admin', ALL_PERMISSIONS.filter((p) => p !== 'backup.manage'), 100],
-      ['manager', 'Manager', P('pos.sell', 'pos.discount', 'pos.price_override', 'pos.void_item', 'pos.void_bill', 'pos.refund', 'pos.open_drawer', 'pos.reprint', 'shifts.manage', 'shifts.view_all', 'payments.verify', 'products.manage', 'stock.view', 'stock.adjust', 'stock.transfer', 'purchasing.manage', 'members.manage', 'promotions.manage', 'coupons.manage', 'reports.view', 'reports.cost', 'audit.view'), 30],
-      ['supervisor', 'Supervisor', P('pos.sell', 'pos.discount', 'pos.void_item', 'pos.void_bill', 'pos.refund', 'pos.open_drawer', 'pos.reprint', 'shifts.manage', 'shifts.view_all', 'payments.verify', 'stock.view', 'members.manage', 'reports.view'), 15],
+      ['manager', 'Manager', P('pos.sell', 'pos.discount', 'pos.price_override', 'pos.void_item', 'pos.void_bill', 'pos.refund', 'pos.open_drawer', 'pos.reprint', 'shifts.manage', 'shifts.view_all', 'payments.verify', 'products.manage', 'stock.view', 'stock.adjust', 'stock.transfer', 'purchasing.manage', 'members.manage', 'promotions.manage', 'coupons.manage', 'orders.manage', 'reports.view', 'reports.cost', 'audit.view'), 30],
+      ['supervisor', 'Supervisor', P('pos.sell', 'pos.discount', 'pos.void_item', 'pos.void_bill', 'pos.refund', 'pos.open_drawer', 'pos.reprint', 'shifts.manage', 'shifts.view_all', 'payments.verify', 'stock.view', 'members.manage', 'orders.manage', 'reports.view'), 15],
       ['cashier', 'Cashier', P('pos.sell', 'pos.void_item', 'shifts.manage'), 0],
       ['stock_staff', 'Stock Staff', P('stock.view', 'stock.adjust', 'stock.transfer', 'purchasing.manage', 'products.manage'), 0],
     ];

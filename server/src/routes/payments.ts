@@ -1,6 +1,6 @@
 import { Router, type Request } from 'express';
 import { z } from 'zod';
-import { pool, q, one } from '../db';
+import { pool, q, one, type Db } from '../db';
 import { requireStaff, requirePerm } from '../auth';
 import { parse, bad, notFound, conflict, hmac, safeEqual, HttpError } from '../util';
 import { config } from '../config';
@@ -34,32 +34,41 @@ async function markPaid(intentId: string, raw: any, verifiedBy: number | null, r
     `UPDATE payment_intents SET status='paid', paid_at=now(), raw=COALESCE($2, raw), verified_by=$3, reference=COALESCE($4, reference)
      WHERE id=$1 AND status IN ('pending','needs_review') RETURNING *`, [intentId, raw ? JSON.stringify(raw) : null, verifiedBy, reference ?? null]);
   if (r) await notify(r);
+  // online shop order paid by PromptPay -> mark the order paid (records the sale, earns points)
+  if (r && String(r.cart_id || '').startsWith('ORDER:')) {
+    const { onOrderIntentPaid } = await import('../services/shop');
+    await onOrderIntentPaid(r).catch((e) => console.error('[shop] order payment hook', e));
+  }
   return r;
 }
 
-paymentsRouter.post('/intents', requireStaff, requirePerm('pos.sell'), async (req, res) => {
-  const b = parse(z.object({ method: z.enum(['promptpay', 'transfer', 'ewallet']), amount: z.number().int().positive(), cartId: z.string() }), req.body);
+/** Create a payment intent (POS or online order). PromptPay uses Omise when configured, otherwise a local EMVCo QR. */
+export async function createPaymentIntent(o: { method: 'promptpay' | 'transfer' | 'ewallet'; amount: number; cartId: string; terminalId: number | null; staffId: number | null }, db: Db = pool) {
   const store = await getSetting('store');
   let provider = 'manual';
   let qrPayload: string | null = null, qrImage: string | null = null, providerRef: string | null = null, raw: any = null;
-  if (b.method === 'promptpay') {
+  if (o.method === 'promptpay') {
     if (config.omiseSecret) {
       provider = 'omise';
-      const charge = await omise('/charges', { amount: String(b.amount), currency: 'thb', 'source[type]': 'promptpay', 'metadata[cart_id]': b.cartId });
+      const charge = await omise('/charges', { amount: String(o.amount), currency: 'thb', 'source[type]': 'promptpay', 'metadata[cart_id]': o.cartId });
       providerRef = charge.id;
       qrImage = charge.source?.scannable_code?.image?.download_uri ?? null;
       raw = { chargeId: charge.id };
     } else {
       if (!store.promptPayId) throw bad('ยังไม่ได้ตั้งค่าหมายเลขพร้อมเพย์ของร้าน (ตั้งค่า → ร้านค้า)', 'NO_PROMPTPAY');
       provider = 'promptpay_local';
-      qrPayload = promptPayPayload(store.promptPayId, b.amount);
+      qrPayload = promptPayPayload(store.promptPayId, o.amount);
     }
   }
-  const it = await one(
+  return one(
     `INSERT INTO payment_intents (provider, method, amount, qr_payload, qr_image_url, provider_ref, cart_id, terminal_id, created_by, raw)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
-    [provider, b.method, b.amount, qrPayload, qrImage, providerRef, b.cartId, req.staff!.terminalId, req.staff!.id, raw ? JSON.stringify(raw) : null]);
-  res.json(it);
+    [provider, o.method, o.amount, qrPayload, qrImage, providerRef, o.cartId, o.terminalId, o.staffId, raw ? JSON.stringify(raw) : null], db);
+}
+
+paymentsRouter.post('/intents', requireStaff, requirePerm('pos.sell'), async (req, res) => {
+  const b = parse(z.object({ method: z.enum(['promptpay', 'transfer', 'ewallet']), amount: z.number().int().positive(), cartId: z.string() }), req.body);
+  res.json(await createPaymentIntent({ method: b.method, amount: b.amount, cartId: b.cartId, terminalId: req.staff!.terminalId, staffId: req.staff!.id }));
 });
 
 paymentsRouter.get('/intents/:id', requireStaff, async (req, res) => {

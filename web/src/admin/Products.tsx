@@ -5,8 +5,9 @@ import { fmtMoney, fmtQty, baht } from '../lib/format';
 import { readSheet, exportXLSX, exportCSV, type Col } from '../lib/export';
 import { gtinCheckDigit } from '../../../shared/barcode';
 import { LabelPrint } from '../components/LabelPrint';
+import { ImagesManager, VariantsEditor, SizeChartEditor } from './ProductOnline';
 
-const empty = { sku: '', name: '', nameEn: '', nameZh: '', categoryId: null, brandId: null, unitId: null, price: 0, cost: 0, memberPrice: null, wholesalePrice: null, wholesaleMinQty: null, isWeighted: false, trackStock: true, vatExempt: false, isActive: true, saleBlocked: false, blockReason: '', minStock: 0, imageUrl: '', barcodes: [] as any[] };
+const empty = { sku: '', name: '', nameEn: '', nameZh: '', categoryId: null, brandId: null, unitId: null, price: 0, cost: 0, memberPrice: null, wholesalePrice: null, wholesaleMinQty: null, isWeighted: false, trackStock: true, vatExempt: false, isActive: true, saleBlocked: false, blockReason: '', minStock: 0, imageUrl: '', description: '', online: true, sizeChart: null, barcodes: [] as any[] };
 
 export default function Products() {
   const toast = useToast();
@@ -25,8 +26,14 @@ export default function Products() {
   const save = async () => {
     try {
       const body = { ...edit, categoryId: edit.categoryId ? Number(edit.categoryId) : null, brandId: edit.brandId ? Number(edit.brandId) : null, unitId: edit.unitId ? Number(edit.unitId) : null, wholesaleMinQty: edit.wholesaleMinQty ? Number(edit.wholesaleMinQty) : null, minStock: Number(edit.minStock || 0), barcodes: edit.barcodes.filter((b: any) => b.barcode).map((b: any) => ({ barcode: b.barcode.trim(), packQty: Number(b.packQty || 1), packPrice: b.packPrice ?? null })) };
-      if (edit.id) await api(`/api/products/${edit.id}`, { method: 'PUT', body }); else await api('/api/products', { body });
-      toast('บันทึกแล้ว', 'ok'); setEdit(null); reload();
+      if (edit.id) { await api(`/api/products/${edit.id}`, { method: 'PUT', body }); toast('บันทึกแล้ว', 'ok'); setEdit(null); }
+      else {
+        // keep the form open so images / sizes can be added right away
+        const r = await api('/api/products', { body });
+        toast('บันทึกแล้ว — เพิ่มรูปและไซส์ได้เลย', 'ok');
+        setEdit({ ...(await api(`/api/products/${r.id}`)), barcodes: body.barcodes });
+      }
+      reload();
     } catch (e) { toast(errMsg(e), 'err'); }
   };
 
@@ -74,10 +81,17 @@ export default function Products() {
                 {list?.map((p) => (
                   <tr key={p.id} style={{ cursor: 'pointer' }} onClick={() => setEdit({ ...p, barcodes: p.barcodes.map((b: any) => ({ ...b })) })}>
                     <td onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={selected.has(p.id)} onChange={(e) => { const s = new Set(selected); e.target.checked ? s.add(p.id) : s.delete(p.id); setSelected(s); }} /></td>
-                    <td className="mono small">{p.sku}</td><td>{p.name}<div className="xs muted">{p.nameEn}</div></td><td className="small">{p.categoryName}</td>
+                    <td className="mono small">{p.sku}</td>
+                    <td><div className="row" style={{ gap: 8, flexWrap: 'nowrap', paddingLeft: p.parentId ? 22 : 0 }}>
+                      {p.imageUrl ? <img src={p.imageUrl} alt="" className="thumb" loading="lazy" /> : <span className="thumb" />}
+                      <div>{p.parentId && <span className="badge">↳ ไซส์ {p.variantLabel}</span>} {p.name}<div className="xs muted">{p.nameEn}
+                        {p.variantCount > 0 && <span className="badge info" style={{ marginLeft: 4 }}>{p.variantCount} ไซส์</span>}
+                        {p.imageIds?.length > 1 && <span className="badge" style={{ marginLeft: 4 }}>{p.imageIds.length} รูป</span>}
+                        {!p.online && <span className="badge warn" style={{ marginLeft: 4 }}>ไม่แสดงออนไลน์</span>}</div></div>
+                    </div></td><td className="small">{p.categoryName}</td>
                     <td className="xs mono">{p.barcodes.map((b: any) => `${b.barcode}${Number(b.packQty) !== 1 ? ` (×${b.packQty})` : ''}`).join(', ')}</td>
                     <td className="right num">{fmtMoney(p.price)}{p.isWeighted ? '/กก.' : ''}</td><td className="right num">{p.memberPrice != null ? fmtMoney(p.memberPrice) : '-'}</td><td className="right num">{p.cost != null ? fmtMoney(p.cost) : '•••'}</td>
-                    <td className="right num small">{p.trackStock ? (p.branchStock ?? []).map((b: any) => <div key={b.branchId} className={Number(b.qty) <= Number(p.minStock) ? 'err' : ''}>{b.branch}: <b>{fmtQty(Number(b.qty))}</b></div>) : '∞'}</td>
+                    <td className="right num small">{p.variantCount > 0 ? <span className="muted xs">ตามไซส์</span> : p.trackStock ? (p.branchStock ?? []).map((b: any) => <div key={b.branchId} className={Number(b.qty) <= Number(p.minStock) ? 'err' : ''}>{b.branch}: <b>{fmtQty(Number(b.qty))}</b></div>) : '∞'}</td>
                     <td>{!p.isActive ? <span className="badge">ปิด</span> : p.saleBlocked ? <span className="badge err">ห้ามขาย</span> : <span className="badge ok">ขาย</span>}</td>
                   </tr>
                 ))}
@@ -112,17 +126,20 @@ export default function Products() {
             <Field label="ราคาส่ง"><MoneyInput value={edit.wholesalePrice} onChange={(v) => setEdit({ ...edit, wholesalePrice: v })} /></Field>
             <Field label="ราคาส่งเมื่อซื้อขั้นต่ำ (ชิ้น)"><input className="in" type="number" value={edit.wholesaleMinQty ?? ''} onChange={(e) => setEdit({ ...edit, wholesaleMinQty: e.target.value })} /></Field>
             <Field label="สต็อกขั้นต่ำ (แจ้งเตือน)"><input className="in" type="number" value={edit.minStock} onChange={(e) => setEdit({ ...edit, minStock: e.target.value })} /></Field>
-            <Field label="รูปสินค้า (URL)"><input className="in" value={edit.imageUrl ?? ''} onChange={(e) => setEdit({ ...edit, imageUrl: e.target.value })} /></Field>
+            {!edit.imageIds?.length && <Field label="รูปสินค้า (URL ภายนอก — ถ้าไม่อัปโหลด)"><input className="in" value={edit.imageUrl ?? ''} onChange={(e) => setEdit({ ...edit, imageUrl: e.target.value })} /></Field>}
           </div>
           <div className="row" style={{ margin: '12px 0' }}>
             <label className="check"><input type="checkbox" checked={edit.isWeighted} onChange={(e) => setEdit({ ...edit, isWeighted: e.target.checked })} /> สินค้าชั่งน้ำหนัก (ราคาต่อ กก.)</label>
             <label className="check"><input type="checkbox" checked={edit.trackStock} onChange={(e) => setEdit({ ...edit, trackStock: e.target.checked })} /> ตัดสต็อก</label>
             <label className="check"><input type="checkbox" checked={edit.vatExempt} onChange={(e) => setEdit({ ...edit, vatExempt: e.target.checked })} /> ยกเว้น VAT</label>
             <label className="check"><input type="checkbox" checked={edit.isActive} onChange={(e) => setEdit({ ...edit, isActive: e.target.checked })} /> เปิดขาย</label>
+            <label className="check"><input type="checkbox" checked={edit.online ?? true} onChange={(e) => setEdit({ ...edit, online: e.target.checked })} /> 🛒 แสดงในเว็บไซต์สั่งของ</label>
             <label className="check"><input type="checkbox" checked={edit.saleBlocked} onChange={(e) => setEdit({ ...edit, saleBlocked: e.target.checked })} /> ห้ามจำหน่าย</label>
             {edit.saleBlocked && <input className="in" style={{ width: 260 }} placeholder="เหตุผลที่ห้ามจำหน่าย" value={edit.blockReason ?? ''} onChange={(e) => setEdit({ ...edit, blockReason: e.target.value })} />}
           </div>
-          {edit.id && edit.trackStock && <ReceiveStock product={edit} branches={branches ?? []} onDone={reload} />}
+          {edit.parentId && <div className="card" style={{ background: '#eff6ff', margin: '10px 0' }}>นี่คือ <b>ไซส์ {edit.variantLabel}</b> ของสินค้าหลัก — รูปภาพ รายละเอียด และตารางไซส์ ตั้งค่าที่สินค้าหลัก</div>}
+          {!edit.parentId && <ShopSection edit={edit} setEdit={setEdit} reload={reload} />}
+          {edit.id && edit.trackStock && !(edit.variantCount > 0) && <ReceiveStock product={edit} branches={branches ?? []} onDone={reload} />}
           <h3>บาร์โค้ด (หลายบาร์โค้ดต่อสินค้า / แพ็ก)</h3>
           <table className="t"><thead><tr><th>บาร์โค้ด (EAN-13/EAN-8/UPC/Code128)</th><th>จำนวนต่อแพ็ก</th><th>ราคาแพ็ก</th><th></th></tr></thead><tbody>
             {edit.barcodes.map((b: any, i: number) => (
@@ -241,6 +258,38 @@ function ReceiveStock({ product, branches, onDone }: { product: any; branches: a
         <Field label="วันหมดอายุ"><input className="in" type="date" value={expiry} onChange={(e) => setExpiry(e.target.value)} /></Field>
         <button className="btn primary" disabled={!Number(qty)} onClick={submit}>บันทึกสต็อก</button>
       </div>
+    </div>
+  );
+}
+
+/** Online shop section of the product form: description, uploaded gallery, sizes and size chart. */
+function ShopSection({ edit, setEdit, reload }: { edit: any; setEdit: (v: any) => void; reload: () => void }) {
+  const [open, setOpen] = useState(true);
+  const refresh = async () => {
+    const fresh = await api(`/api/products/${edit.id}`);
+    setEdit({ ...edit, imageIds: fresh.imageIds, imageUrl: fresh.imageUrl, variantCount: fresh.variantCount, trackStock: fresh.trackStock });
+    reload();
+  };
+  return (
+    <div className="card shop-section" style={{ margin: '12px 0' }}>
+      <div className="row between" style={{ cursor: 'pointer' }} onClick={() => setOpen(!open)}><h3 style={{ margin: 0 }}>🛒 หน้าร้านออนไลน์ — รูปภาพ · ไซส์ · ตารางไซส์</h3><span>{open ? '▲' : '▼'}</span></div>
+      {open && (
+        <div className="grid" style={{ gap: 14, marginTop: 10 }}>
+          <Field label="รายละเอียดสินค้า (แสดงบนเว็บไซต์)"><textarea className="in" rows={4} value={edit.description ?? ''} onChange={(e) => setEdit({ ...edit, description: e.target.value })} placeholder="วัสดุ ขนาด วิธีใช้ ฯลฯ" /></Field>
+          <div>
+            <b>รูปภาพสินค้า</b> <span className="xs muted">(อัปโหลดได้ไม่จำกัด จัดลำดับได้)</span>
+            {edit.id ? <ImagesManager productId={edit.id} onChange={refresh} /> : <p className="small muted">กด “บันทึก” ก่อน แล้วจึงอัปโหลดรูปได้</p>}
+          </div>
+          <div>
+            <b>ไซส์ / ตัวเลือก</b> <span className="xs muted">(เช่น S M L หรือเบอร์รองเท้า — ลูกค้าต้องเลือกไซส์ก่อนใส่ตะกร้า)</span>
+            {edit.id ? <VariantsEditor product={edit} onSaved={refresh} /> : <p className="small muted">กด “บันทึก” ก่อน แล้วจึงเพิ่มไซส์ได้</p>}
+          </div>
+          <div>
+            <b>ตารางไซส์</b> <span className="xs muted">(บันทึกพร้อมสินค้า เมื่อกด “บันทึก”)</span>
+            <SizeChartEditor value={edit.sizeChart ?? null} onChange={(v) => setEdit({ ...edit, sizeChart: v })} />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -53,6 +53,7 @@ export default function Pos() {
   const [modal, setModal] = useState<string | null>(null);
   const [input, setInput] = useState('');
   const [weighFor, setWeighFor] = useState<{ product: any; barcode: string } | null>(null);
+  const [sizeFor, setSizeFor] = useState<any>(null);
   const [couponCheck, setCouponCheck] = useState<any>(null);
   const [locked, setLocked] = useState(false);
   const [lastReceipt, setLastReceipt] = useState<any>(null);
@@ -232,6 +233,7 @@ export default function Pos() {
   const addProduct = useCallback((pr: any, opts: { qty?: number; barcode?: string | null; packQty?: number; packPrice?: number | null; embeddedPrice?: number | null; weightKg?: number | null; freshStock?: boolean } = {}) => {
     if (pr.saleBlocked) { toast(`⛔ ห้ามจำหน่าย: ${pr.name}${pr.blockReason ? '\n' + pr.blockReason : ''}`, 'err'); return; }
     if (!pr.isActive) { toast(`สินค้าถูกปิดการขาย: ${pr.name}`, 'err'); return; }
+    if (pr.variantCount > 0) { setSizeFor(pr); return; } // sold by size: pick the size first
     if (pr.isWeighted && opts.weightKg == null && opts.embeddedPrice == null) { setWeighFor({ product: pr, barcode: opts.barcode ?? '' }); return; }
     const packQty = opts.packQty ?? 1;
     const qty = opts.weightKg ?? opts.qty ?? 1;
@@ -334,7 +336,7 @@ export default function Pos() {
     new Audio('data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=').play().catch(() => {});
   }, [idx, addProduct, settings, online, catalog, updateBill, toast]); // eslint-disable-line
 
-  useBarcodeScanner((c) => { if (!modal && !locked && !couponCheck && !weighFor) handleCode(c); }, true);
+  useBarcodeScanner((c) => { if (!modal && !locked && !couponCheck && !weighFor && !sizeFor) handleCode(c); }, true);
 
   const selLine = bill.lines.find((l) => l.lineId === sel) ?? bill.lines[bill.lines.length - 1];
   const changeQty = (lineId: string, qty: number) => {
@@ -470,7 +472,7 @@ export default function Pos() {
   // ---------------- keyboard shortcuts ----------------
   useEffect(() => {
     const k = (e: KeyboardEvent) => {
-      if (locked || modal || couponCheck || weighFor || registerReq) return;
+      if (locked || modal || couponCheck || weighFor || sizeFor || registerReq) return;
       const map: Record<string, () => void> = {
         F1: () => setModal('help'), F2: () => setModal('search'), F3: () => setModal('member'), F4: () => { if (selLine) { const v = prompt('จำนวน', String(selLine.qty)); if (v) changeQty(selLine.lineId, Number(v)); } },
         F5: () => setModal('discount'), F6: () => { const c = prompt('รหัสคูปอง'); if (c) handleCoupon(c); }, F7: holdBill, F8: () => setModal('bills'),
@@ -508,7 +510,8 @@ export default function Pos() {
 
   if (!catalog) return <div className="center" style={{ padding: '4rem' }}>กำลังโหลดข้อมูลสินค้า…</div>;
 
-  const quickItems = (catalog.products as any[]).filter((x) => x.isWeighted).concat((catalog.products as any[]).filter((x) => !x.isWeighted)).slice(0, 24);
+  const sellable = (catalog.products as any[]).filter((x) => !x.parentId);
+  const quickItems = sellable.filter((x) => x.isWeighted).concat(sellable.filter((x) => !x.isWeighted)).slice(0, 24);
 
   return (
     <div className="pos">
@@ -657,6 +660,18 @@ export default function Pos() {
         </Modal>
       )}
       {weighFor && <WeightModal product={weighFor.product} onClose={() => setWeighFor(null)} onDone={(kg) => { const pr = weighFor.product; setWeighFor(null); addProduct(pr, { weightKg: kg, barcode: weighFor.barcode || null }); }} />}
+      {sizeFor && (
+        <Modal title={`เลือกไซส์: ${sizeFor.name}`} onClose={() => setSizeFor(null)} width={560}>
+          <div className="size-pick">
+            {(catalog.products as any[]).filter((x) => x.parentId === sizeFor.id && x.isActive).sort((a, b) => a.variantSort - b.variantSort).map((v) => (
+              <button key={v.id} className="btn" disabled={v.trackStock && Number(v.stock) <= 0 && !settings?.pos?.allowNegativeStock}
+                onClick={() => { setSizeFor(null); addProduct(v); }}>
+                <b style={{ fontSize: '1.3rem' }}>{v.variantLabel}</b><span>{fmtMoney(v.price)}</span><small className="muted">{v.trackStock ? `คงเหลือ ${fmtQty(Number(v.stock))}` : ''}</small>
+              </button>
+            ))}
+          </div>
+        </Modal>
+      )}
       {couponCheck && <CouponConfirm check={couponCheck} discount={couponCheck.discount} onClose={() => setCouponCheck(null)} onUse={useCoupon} />}
       {modal === 'outbox' && <OutboxModal onClose={() => setModal(null)} />}
       {modal === 'labels' && <LabelModal products={catalog.products} onClose={() => setModal(null)} />}

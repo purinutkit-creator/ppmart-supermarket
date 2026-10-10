@@ -7,6 +7,7 @@ import { sweepCoupons } from './services/coupons';
 import { expirePoints } from './services/points';
 import { tx, pool } from './db';
 import { seedIfEmpty } from './seed';
+import { expireUnpaidOrders } from './services/shop';
 
 async function main() {
   await migrate();
@@ -17,6 +18,7 @@ async function main() {
 
   // Housekeeping jobs
   setInterval(() => sweepCoupons().catch((e) => console.error('[sweep coupons]', e)), 60_000);
+  setInterval(() => expireUnpaidOrders().catch((e) => console.error('[expire orders]', e)), 60_000);
   setInterval(() => tx((db) => expirePoints(db)).catch((e) => console.error('[expire points]', e)), 3_600_000);
   setInterval(() => {
     pool.query(`UPDATE payment_intents SET status='expired' WHERE status='pending' AND created_at < now() - interval '30 minutes'`).catch(() => {});

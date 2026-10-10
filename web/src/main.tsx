@@ -10,6 +10,7 @@ const Pos = lazy(() => import('./pages/Pos'));
 const Admin = lazy(() => import('./admin/AdminApp'));
 const CustomerDisplay = lazy(() => import('./pages/CustomerDisplay'));
 const MemberPortal = lazy(() => import('./pages/MemberPortal'));
+const Shop = lazy(() => import('./pages/Shop'));
 
 function useSession() {
   const [s, setS] = useState(getSession());
@@ -38,6 +39,7 @@ function App() {
           <Route path="/admin/*" element={<RequireStaff><Admin /></RequireStaff>} />
           <Route path="/display" element={<CustomerDisplay />} />
           <Route path="/member/*" element={<MemberPortal />} />
+          <Route path="/shop/*" element={<Shop />} />
           <Route path="*" element={<Navigate to="/login" replace />} />
         </Routes>
       </Suspense>

@@ -24,6 +24,11 @@ export const DEFAULT_SETTINGS: Record<string, any> = {
     font: 'Kanit', promoImages: [], slideSeconds: 6, thankYouSeconds: 8,
   },
   receipt: null, // filled with default templates by seed / client
+  shop: {
+    enabled: true, title: 'ช้อปออนไลน์', announcement: '', branchId: null, // stock & pickup branch (null = first branch)
+    pickup: true, delivery: true, deliveryFee: 4000, freeDeliveryMin: 50000, minOrder: 0,
+    payments: { promptpay: true, payAtStore: true, cod: false }, paymentTimeoutMinutes: 30,
+  },
 };
 
 const cache = new Map<string, any>();

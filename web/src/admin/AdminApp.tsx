@@ -7,6 +7,8 @@ import { setPrintSettings } from '../lib/receipt-print';
 import { printer } from '../lib/printer';
 import { DEFAULT_PRINTER } from '../components/DevicesPanel';
 import Dashboard from './Dashboard';
+import { useToast } from '../components/ui';
+import { fmtMoney } from '../lib/format';
 
 const Reports = lazy(() => import('./Reports'));
 const Products = lazy(() => import('./Products'));
@@ -22,12 +24,13 @@ const Settings = lazy(() => import('./Settings'));
 const ReceiptDesigner = lazy(() => import('./ReceiptDesigner'));
 const Devices = lazy(() => import('./Devices'));
 const Audit = lazy(() => import('./Audit'));
+const Orders = lazy(() => import('./Orders'));
 
 export const adminBus = { ws: null as RealtimeClient | null };
 
 const NAV: { grp: string; items: [string, string, string | null][] }[] = [
   { grp: 'ภาพรวม', items: [['/admin', '📊 Dashboard', 'reports.view'], ['/admin/reports', '📈 รายงาน', 'reports.view']] },
-  { grp: 'ขาย', items: [['/pos', '🛒 หน้าขาย POS', 'pos.sell'], ['/admin/payments', '💳 ตรวจสอบการชำระเงิน', 'payments.verify'], ['/admin/shifts', '⏱ กะแคชเชียร์', 'shifts.view_all']] },
+  { grp: 'ขาย', items: [['/pos', '🛒 หน้าขาย POS', 'pos.sell'], ['/admin/orders', '🌐 ออเดอร์ออนไลน์', 'orders.manage'], ['/admin/payments', '💳 ตรวจสอบการชำระเงิน', 'payments.verify'], ['/admin/shifts', '⏱ กะแคชเชียร์', 'shifts.view_all']] },
   { grp: 'สินค้า', items: [['/admin/products', '📦 สินค้า', 'products.manage'], ['/admin/stock', '🏬 สต็อก', 'stock.view'], ['/admin/purchasing', '🚚 จัดซื้อ', 'purchasing.manage']] },
   { grp: 'การตลาด', items: [['/admin/members', '👥 สมาชิก', 'members.manage'], ['/admin/promotions', '🏷 โปรโมชั่น', 'promotions.manage'], ['/admin/coupons', '🎟 Receipt Coupon', 'coupons.manage']] },
   { grp: 'ระบบ', items: [['/admin/staff', '🧑‍💼 พนักงานและสิทธิ์', 'staff.manage'], ['/admin/settings', '⚙️ ตั้งค่า', 'settings.manage'], ['/admin/receipt-designer', '🧾 ออกแบบใบเสร็จ', 'settings.manage'], ['/admin/devices', '🔌 อุปกรณ์', null], ['/admin/audit', '📜 Activity Log', 'audit.view']] },
@@ -37,6 +40,7 @@ export default function AdminApp() {
   const nav = useNavigate();
   const s = getSession()!;
   const [store, setStore] = useState<any>(null);
+  const toast = useToast();
   useEffect(() => {
     api('/api/admin/settings').then((st) => {
       setStore(st.store);
@@ -47,7 +51,11 @@ export default function AdminApp() {
     const ws = new RealtimeClient(`token=${encodeURIComponent(s.token)}`);
     adminBus.ws = ws;
     const off = ws.on('_unauthorized', () => { setSession(null); nav('/login'); });
-    return () => { off(); ws.close(); };
+    // new online-shop order notification on every back-office page
+    const offOrder = ws.on('shop.order', (m: any) => {
+      if (m?.orderNo && m.status === 'pending_payment' && m.total != null && (can('orders.manage') || can('payments.verify'))) toast(`🛒 ออเดอร์ออนไลน์ใหม่ ${m.orderNo} ${fmtMoney(m.total)}`, 'ok');
+    });
+    return () => { off(); offOrder(); ws.close(); };
   }, []); // eslint-disable-line
 
   return (
@@ -87,6 +95,7 @@ export default function AdminApp() {
             <Route path="receipt-designer" element={<ReceiptDesigner />} />
             <Route path="devices" element={<Devices />} />
             <Route path="audit" element={<Audit />} />
+            <Route path="orders" element={<Orders />} />
           </Routes>
         </Suspense>
       </main>

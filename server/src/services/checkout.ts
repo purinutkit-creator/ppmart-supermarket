@@ -125,7 +125,7 @@ async function doCheckout(db: Db, staff: StaffCtx, input: CheckoutInput, ip?: st
 
   // ---- products ----
   const productIds = [...new Set(input.lines.map((l) => l.productId))];
-  const prows = (await db.query('SELECT * FROM products WHERE id = ANY($1)', [productIds])).rows;
+  const prows = (await db.query('SELECT p.*, (SELECT COUNT(*) FROM products v WHERE v.parent_id=p.id AND v.is_active)::int AS variant_count FROM products p WHERE p.id = ANY($1)', [productIds])).rows;
   const pmap = new Map<number, any>(prows.map((r) => [r.id, r]));
   const products = new Map<number, PricingProduct>();
   for (const id of productIds) {
@@ -133,6 +133,8 @@ async function doCheckout(db: Db, staff: StaffCtx, input: CheckoutInput, ip?: st
     if (!r) throw bad(`ไม่พบสินค้า #${id}`, 'PRODUCT_NOT_FOUND');
     if (!r.is_active) throw conflict(`สินค้า ${r.name} ถูกปิดการขาย`, 'PRODUCT_INACTIVE');
     if (r.sale_blocked) throw conflict(`สินค้า ${r.name} ห้ามจำหน่าย${r.block_reason ? ': ' + r.block_reason : ''}`, 'SALE_BLOCKED');
+    // a product with sizes is sold by size (each size has its own stock)
+    if (r.variant_count > 0) throw conflict(`กรุณาเลือกไซส์ของ ${r.name}`, 'SIZE_REQUIRED');
     products.set(id, rowToPricingProduct(r));
   }
 

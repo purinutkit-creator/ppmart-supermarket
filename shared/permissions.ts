@@ -18,6 +18,7 @@ export const PERMISSIONS = {
   'members.manage': 'จัดการสมาชิก/คะแนน',
   'promotions.manage': 'จัดการโปรโมชั่น',
   'coupons.manage': 'จัดการคูปอง',
+  'orders.manage': 'จัดการออเดอร์ออนไลน์',
   'reports.view': 'ดูรายงานยอดขาย',
   'reports.cost': 'ดูต้นทุนและกำไร',
   'staff.manage': 'จัดการพนักงานและสิทธิ์',

@@ -19,7 +19,8 @@ posRouter.use(requireStaff);
 const PRODUCT_SELECT = `
   SELECT p.*, u.name AS unit_name, c.name AS category_name, b.name AS brand_name,
     COALESCE((SELECT json_agg(json_build_object('barcode', pb.barcode, 'packQty', pb.pack_qty, 'packPrice', pb.pack_price)) FROM product_barcodes pb WHERE pb.product_id=p.id), '[]') AS barcodes,
-    COALESCE((SELECT qty FROM stock_levels sl WHERE sl.product_id=p.id AND sl.branch_id=$1), 0) AS stock
+    COALESCE((SELECT qty FROM stock_levels sl WHERE sl.product_id=p.id AND sl.branch_id=$1), 0) AS stock,
+    (SELECT COUNT(*) FROM products v WHERE v.parent_id=p.id AND v.is_active) AS variant_count
   FROM products p LEFT JOIN units u ON u.id=p.unit_id LEFT JOIN categories c ON c.id=p.category_id LEFT JOIN brands b ON b.id=p.brand_id`;
 
 async function branchOf(terminalId: number | null, staffBranch: number | null) {
