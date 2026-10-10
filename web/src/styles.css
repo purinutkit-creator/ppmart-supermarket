@@ -530,3 +530,32 @@ table.t tr:hover td { background: #f8fafc; }
 .switch input:checked + span { background: var(--ok); }
 .switch input:checked + span::before { transform: translateX(20px); }
 @media (max-width: 760px) { .sf-bn { grid-template-columns: 1fr; } }
+/* size chart (comparison-chart style) */
+.sc { display: grid; gap: 8px; }
+.sc-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.sc-table { border-collapse: collapse; min-width: 100%; font-size: 1rem; color: #262626; }
+.sc-table th, .sc-table td { border: 1px solid #e5e5e5; padding: 16px 22px; text-align: center; white-space: nowrap; font-weight: 400; }
+.sc-table tbody th { position: sticky; left: 0; z-index: 1; background: #f2f2f2; font-weight: 700; min-width: 96px; }
+.sc-table thead th { background: #f2f2f2; font-weight: 700; }
+.sc-table td.hi, .sc-table tr.hi td { background: #111; color: #fff; font-weight: 700; }
+.sc-note { margin: 0; font-size: .85rem; color: #737373; }
+.sc-bg { position: fixed; inset: 0; z-index: 90; background: rgba(0, 0, 0, .45); display: flex; align-items: center; justify-content: center; padding: 24px; animation: fade .15s; }
+.sc-modal { background: #fff; width: min(1100px, 100%); max-height: calc(100vh - 48px); display: flex; flex-direction: column; box-shadow: 0 20px 60px rgba(0, 0, 0, .25); }
+.sc-modal header { position: relative; padding: 22px 64px; border-bottom: 1px solid #ececec; text-align: center; }
+.sc-modal header h2 { margin: 0; font-size: 1.35rem; font-weight: 700; font-family: "Kanit", var(--font-member); color: #262626; }
+.sc-modal header button { position: absolute; right: 18px; top: 50%; transform: translateY(-50%); background: none; border: 0; font-size: 1.6rem; line-height: 1; cursor: pointer; color: #262626; padding: 6px; }
+.sc-body { padding: 28px 24px 32px; overflow: auto; }
+.sc-preview { border: 1px dashed var(--line); border-radius: 10px; padding: 12px; background: #fff; }
+.sc-preview .sc-table th, .sc-preview .sc-table td { padding: 10px 14px; font-size: .9rem; }
+.sc-edit td, .sc-edit th { padding: 3px !important; }
+.sc-edit td .in { min-width: 64px; text-align: center; padding: .35rem .4rem; }
+.sc-edit .lbl { background: #f1f5f9; }
+.sc-edit .lbl .in { min-width: 110px; font-weight: 700; text-align: left; }
+@media (max-width: 760px) {
+  .sc-bg { padding: 0; align-items: flex-end; }
+  .sc-modal { max-height: 90vh; }
+  .sc-modal header { padding: 16px 52px; }
+  .sc-modal header h2 { font-size: 1.05rem; }
+  .sc-body { padding: 16px 12px 24px; }
+  .sc-table th, .sc-table td { padding: 12px 14px; font-size: .9rem; }
+}

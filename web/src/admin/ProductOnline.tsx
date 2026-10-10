@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { api } from '../lib/api';
 import { useToast, errMsg, MoneyInput } from '../components/ui';
 import { fmtQty } from '../lib/format';
+import { SizeChartTable, transpose, type SizeChart } from '../components/SizeChart';
 
 /** Downscale on the client so uploads stay small (longest side ≤ 1600px, WebP/JPEG). */
 export async function prepareImage(file: File, maxSide = 1600): Promise<{ dataBase64: string; mime: string; width: number; height: number }> {
@@ -155,52 +156,129 @@ export function VariantsEditor({ product, onSaved }: { product: any; onSaved?: (
   );
 }
 
-export type SizeChart = { columns: string[]; rows: string[][]; note?: string | null };
+export type { SizeChart } from '../components/SizeChart';
+
+const TEMPLATES: { name: string; chart: SizeChart }[] = [
+  { name: 'รองเท้าผู้ชาย Adidas', chart: { layout: 'horizontal', title: 'รองเท้าสำหรับผู้ชายแบรนด์อาดิดาส ตารางเทียบขนาด', columns: [], note: '', rows: [
+    ['US', '4', '4.5', '5', '5.5', '6', '6.5', '7', '7.5', '8', '8.5', '9', '9.5', '10', '10.5', '11', '11.5', '12', '12.5', '13'],
+    ['UK', '3.5', '4', '4.5', '5', '5.5', '6', '6.5', '7', '7.5', '8', '8.5', '9', '9.5', '10', '10.5', '11', '11.5', '12', '12.5'],
+    ['CM', '22', '22.5', '23', '23.5', '24', '24.5', '25', '25.5', '26', '26.5', '27', '27.5', '28', '28.5', '29', '29.5', '30', '30.5', '31'],
+    ['EU', '36', '36 2/3', '37 1/3', '38', '38 2/3', '39 1/3', '40', '40 2/3', '41 1/3', '42', '42 2/3', '43 1/3', '44', '44 2/3', '45 1/3', '46', '46 2/3', '47 1/3', '48'],
+  ] } },
+  { name: 'รองเท้าผู้ชาย Nike', chart: { layout: 'horizontal', title: 'รองเท้าสำหรับผู้ชายแบรนด์ไนกี้ ตารางเทียบขนาด', columns: [], note: '', rows: [
+    ['US', '6', '6.5', '7', '7.5', '8', '8.5', '9', '9.5', '10', '10.5', '11', '11.5', '12'],
+    ['UK', '5.5', '6', '6', '6.5', '7', '7.5', '8', '8.5', '9', '9.5', '10', '10.5', '11'],
+    ['CM', '24', '24.5', '25', '25.5', '26', '26.5', '27', '27.5', '28', '28.5', '29', '29.5', '30'],
+    ['EU', '38.5', '39', '40', '40.5', '41', '42', '42.5', '43', '44', '44.5', '45', '45.5', '46'],
+  ] } },
+  { name: 'เสื้อ', chart: { layout: 'horizontal', title: 'ตารางไซส์เสื้อ', columns: [], note: 'วัดแบบวางราบ คลาดเคลื่อนได้ ±1 นิ้ว', rows: [
+    ['ไซส์', 'S', 'M', 'L', 'XL', '2XL'], ['รอบอก (นิ้ว)', '36', '38', '40', '42', '44'], ['ความยาว (นิ้ว)', '27', '28', '29', '30', '31'],
+  ] } },
+  { name: 'ตารางเปล่า', chart: { layout: 'horizontal', title: '', columns: [], note: '', rows: [['US', '', '', ''], ['UK', '', '', ''], ['CM', '', '', ''], ['EU', '', '', '']] } },
+];
+
+/** Parse rows copied from Excel / Google Sheets / a web page (tab separated, or 2+ spaces). */
+function parsePasted(text: string): string[][] {
+  return text.replace(/\r/g, '').split('\n').map((l) => l.trimEnd()).filter((l) => l.trim())
+    .map((l) => (l.includes('\t') ? l.split('\t') : l.trim().split(/\s{2,}/)).map((x) => x.trim()));
+}
 
 export function SizeChartEditor({ value, onChange }: { value: SizeChart | null; onChange: (v: SizeChart | null) => void }) {
+  const [paste, setPaste] = useState<string | null>(null);
   if (!value) {
     return (
       <div className="row">
-        <button type="button" className="btn sm" onClick={() => onChange({ columns: ['ไซส์', 'รอบอก (นิ้ว)', 'ความยาว (นิ้ว)'], rows: [['S', '', ''], ['M', '', ''], ['L', '', '']], note: '' })}>+ สร้างตารางไซส์ (เสื้อ)</button>
-        <button type="button" className="btn sm" onClick={() => onChange({ columns: ['EU', 'UK', 'US', 'ความยาวเท้า (ซม.)'], rows: [['38', '5', '6', '24'], ['39', '6', '7', '24.5'], ['40', '6.5', '7.5', '25']], note: '' })}>+ ตารางไซส์รองเท้า</button>
-        <button type="button" className="btn sm" onClick={() => onChange({ columns: ['ไซส์', ''], rows: [['', '']], note: '' })}>+ ตารางเปล่า</button>
+        {TEMPLATES.map((t) => <button key={t.name} type="button" className="btn sm" onClick={() => onChange(structuredClone(t.chart))}>+ {t.name}</button>)}
+        <button type="button" className="btn sm" onClick={() => setPaste('')}>📋 วางจาก Excel</button>
+        {paste != null && <PasteBox value={paste} setValue={setPaste} onApply={(rows) => { onChange({ layout: 'horizontal', title: '', columns: [], note: '', rows }); setPaste(null); }} />}
       </div>
     );
   }
-  const cols = value.columns;
-  const setCell = (r: number, c: number, v: string) => onChange({ ...value, rows: value.rows.map((row, i) => (i === r ? row.map((x, j) => (j === c ? v : x)) : row)) });
+  const horizontal = value.layout === 'horizontal';
+  const set = (patch: Partial<SizeChart>) => onChange({ ...value, ...patch });
   return (
-    <div>
-      <div className="table-wrap">
-        <table className="t size-chart-edit">
-          <thead>
-            <tr>
-              {cols.map((c, j) => (
-                <th key={j}>
-                  <div className="row" style={{ gap: 2, flexWrap: 'nowrap' }}>
-                    <input className="in" style={{ minWidth: 80 }} value={c} placeholder="หัวคอลัมน์" onChange={(e) => onChange({ ...value, columns: cols.map((x, k) => (k === j ? e.target.value : x)) })} />
-                    {cols.length > 1 && <button type="button" className="btn sm ghost" title="ลบคอลัมน์" onClick={() => onChange({ ...value, columns: cols.filter((_, k) => k !== j), rows: value.rows.map((r) => r.filter((_, k) => k !== j)) })}>✕</button>}
-                  </div>
-                </th>
-              ))}
-              <th><button type="button" className="btn sm" disabled={cols.length >= 12} onClick={() => onChange({ ...value, columns: [...cols, ''], rows: value.rows.map((r) => [...r, '']) })}>+ คอลัมน์</button></th>
-            </tr>
-          </thead>
-          <tbody>
-            {value.rows.map((row, i) => (
-              <tr key={i}>
-                {cols.map((_, j) => <td key={j}><input className="in" value={row[j] ?? ''} onChange={(e) => setCell(i, j, e.target.value)} /></td>)}
-                <td><button type="button" className="btn sm ghost" onClick={() => onChange({ ...value, rows: value.rows.filter((_, k) => k !== i) })}>✕</button></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+    <div className="grid" style={{ gap: 8 }}>
+      <div className="row" style={{ flexWrap: 'nowrap' }}>
+        <input className="in" style={{ flex: 1 }} placeholder="หัวข้อตาราง เช่น รองเท้าสำหรับผู้ชายแบรนด์อาดิดาส ตารางเทียบขนาด" value={value.title ?? ''} onChange={(e) => set({ title: e.target.value })} />
+        <button type="button" className="btn sm" title="สลับแนวตาราง" onClick={() => onChange(transpose(value))}>⇄ {horizontal ? 'แนวตั้ง' : 'แนวนอน'}</button>
+        <button type="button" className="btn sm" onClick={() => setPaste('')}>📋 วางจาก Excel</button>
       </div>
-      <div className="row" style={{ marginTop: 6 }}>
-        <button type="button" className="btn sm" disabled={value.rows.length >= 60} onClick={() => onChange({ ...value, rows: [...value.rows, cols.map(() => '')] })}>+ แถว</button>
-        <input className="in" style={{ flex: 1 }} placeholder="หมายเหตุ เช่น วัดแบบวางราบ คลาดเคลื่อน ±1 นิ้ว" value={value.note ?? ''} onChange={(e) => onChange({ ...value, note: e.target.value })} />
+      {paste != null && <PasteBox value={paste} setValue={setPaste} onApply={(rows) => { onChange(horizontal ? { ...value, rows } : { ...value, columns: rows[0] ?? [], rows: rows.slice(1) }); setPaste(null); }} />}
+      {horizontal ? <HorizontalGrid value={value} set={set} /> : <VerticalGrid value={value} set={set} />}
+      <div className="row" style={{ flexWrap: 'nowrap' }}>
+        <input className="in" style={{ flex: 1 }} placeholder="หมายเหตุใต้ตาราง (ไม่บังคับ)" value={value.note ?? ''} onChange={(e) => set({ note: e.target.value })} />
         <button type="button" className="btn sm danger" onClick={() => confirm('ลบตารางไซส์?') && onChange(null)}>ลบตาราง</button>
       </div>
+      <div className="sc-preview"><div className="xs muted" style={{ marginBottom: 6 }}>ตัวอย่างที่ลูกค้าเห็น</div>{value.title && <h4 style={{ textAlign: 'center', margin: '0 0 8px' }}>{value.title}</h4>}<SizeChartTable chart={value} /></div>
+    </div>
+  );
+}
+
+function PasteBox({ value, setValue, onApply }: { value: string; setValue: (v: string | null) => void; onApply: (rows: string[][]) => void }) {
+  const rows = parsePasted(value);
+  return (
+    <div className="card" style={{ width: '100%', display: 'grid', gap: 6 }}>
+      <textarea className="in mono" rows={5} autoFocus value={value} onChange={(e) => setValue(e.target.value)} placeholder={'คัดลอกตารางจาก Excel / Google Sheets มาวาง เช่น\nUS\t4\t4.5\t5\nUK\t3.5\t4\t4.5'} />
+      <div className="row"><span className="xs muted">{rows.length} แถว × {Math.max(0, ...rows.map((r) => r.length))} ช่อง</span><span className="spacer" />
+        <button type="button" className="btn sm" onClick={() => setValue(null)}>ยกเลิก</button>
+        <button type="button" className="btn sm primary" disabled={!rows.length} onClick={() => onApply(rows.map((r) => r.slice(0, 40)).slice(0, 60))}>ใช้ข้อมูลนี้</button></div>
+    </div>
+  );
+}
+
+function HorizontalGrid({ value, set }: { value: SizeChart; set: (p: Partial<SizeChart>) => void }) {
+  const width = Math.max(2, ...value.rows.map((r) => r.length));
+  const rows = value.rows.map((r) => Array.from({ length: width }, (_, k) => r[k] ?? ''));
+  const setCell = (i: number, k: number, v: string) => set({ rows: rows.map((r, a) => (a === i ? r.map((x, b) => (b === k ? v : x)) : r)) });
+  return (
+    <div className="table-wrap">
+      <table className="t sc-edit">
+        <thead><tr><th className="lbl">ระบบไซส์</th>{Array.from({ length: width - 1 }, (_, k) => (
+          <th key={k}><button type="button" className="btn sm ghost" title="ลบคอลัมน์นี้" disabled={width <= 2} onClick={() => set({ rows: rows.map((r) => r.filter((_, b) => b !== k + 1)) })}>✕</button></th>
+        ))}<th /></tr></thead>
+        <tbody>
+          {rows.map((r, i) => (
+            <tr key={i}>
+              <td className="lbl"><input className="in" value={r[0]} placeholder="เช่น US" onChange={(e) => setCell(i, 0, e.target.value)} /></td>
+              {r.slice(1).map((x, k) => <td key={k}><input className="in" value={x} onChange={(e) => setCell(i, k + 1, e.target.value)} /></td>)}
+              <td><button type="button" className="btn sm ghost" title="ลบแถว" onClick={() => set({ rows: rows.filter((_, a) => a !== i) })}>✕</button></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div className="row" style={{ marginTop: 6 }}>
+        <button type="button" className="btn sm" disabled={width >= 40} onClick={() => set({ rows: rows.map((r) => [...r, '']) })}>+ เพิ่มไซส์ (คอลัมน์)</button>
+        <button type="button" className="btn sm" disabled={rows.length >= 60} onClick={() => set({ rows: [...rows, Array.from({ length: width }, () => '')] })}>+ เพิ่มแถว (เช่น JP, KR)</button>
+      </div>
+    </div>
+  );
+}
+
+function VerticalGrid({ value, set }: { value: SizeChart; set: (p: Partial<SizeChart>) => void }) {
+  const cols = value.columns;
+  const setCell = (r: number, c: number, v: string) => set({ rows: value.rows.map((row, i) => (i === r ? cols.map((_, j) => (j === c ? v : row[j] ?? '')) : row)) });
+  return (
+    <div className="table-wrap">
+      <table className="t sc-edit">
+        <thead><tr>
+          {cols.map((c, j) => (
+            <th key={j}><div className="row" style={{ gap: 2, flexWrap: 'nowrap' }}>
+              <input className="in" value={c} placeholder="หัวคอลัมน์" onChange={(e) => set({ columns: cols.map((x, k) => (k === j ? e.target.value : x)) })} />
+              {cols.length > 1 && <button type="button" className="btn sm ghost" onClick={() => set({ columns: cols.filter((_, k) => k !== j), rows: value.rows.map((r) => r.filter((_, k) => k !== j)) })}>✕</button>}
+            </div></th>
+          ))}
+          <th><button type="button" className="btn sm" disabled={cols.length >= 40} onClick={() => set({ columns: [...cols, ''], rows: value.rows.map((r) => [...r, '']) })}>+ คอลัมน์</button></th>
+        </tr></thead>
+        <tbody>
+          {value.rows.map((row, i) => (
+            <tr key={i}>
+              {cols.map((_, j) => <td key={j}><input className="in" value={row[j] ?? ''} onChange={(e) => setCell(i, j, e.target.value)} /></td>)}
+              <td><button type="button" className="btn sm ghost" onClick={() => set({ rows: value.rows.filter((_, k) => k !== i) })}>✕</button></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <button type="button" className="btn sm" style={{ marginTop: 6 }} disabled={value.rows.length >= 60} onClick={() => set({ rows: [...value.rows, cols.map(() => '')] })}>+ แถว</button>
     </div>
   );
 }

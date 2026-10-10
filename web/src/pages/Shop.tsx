@@ -4,9 +4,10 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Routes, Route, Link, Navigate, useNavigate, useParams, useSearchParams, useLocation } from 'react-router-dom';
 import { api } from '../lib/api';
-import { Modal, QrCanvas, useToast, errMsg } from '../components/ui';
+import { QrCanvas, useToast, errMsg } from '../components/ui';
 import { fmtMoney, fmtQty, fmtDate, uuid } from '../lib/format';
 import { applyAreaFonts, loadFont } from '../lib/fonts';
+import { SizeChartTable, SizeChartModal } from '../components/SizeChart';
 
 const MEMBER = 'ppmart.member'; // shared with the member website
 const ORDERS = 'ppmart.shop.orders';
@@ -536,18 +537,6 @@ function Gallery({ ids, fallback, name, badge }: { ids: number[]; fallback?: str
   );
 }
 
-export function SizeChartTable({ chart }: { chart: { columns: string[]; rows: string[][]; note?: string | null } }) {
-  return (
-    <div>
-      <div className="table-wrap"><table className="t size-chart">
-        <thead><tr>{chart.columns.map((c, i) => <th key={i}>{c}</th>)}</tr></thead>
-        <tbody>{chart.rows.map((r, i) => <tr key={i}>{chart.columns.map((_, j) => <td key={j}>{r[j] ?? ''}</td>)}</tr>)}</tbody>
-      </table></div>
-      {chart.note && <p className="small muted">{chart.note}</p>}
-    </div>
-  );
-}
-
 function Acc({ title, children, open: o = false }: { title: string; children: ReactNode; open?: boolean }) {
   const [open, setOpen] = useState(o);
   return <div className={`st-acc ${open ? 'on' : ''}`}><button onClick={() => setOpen(!open)}>{title}<Ic n="down" s={18} /></button>{open && <div className="body">{children}</div>}</div>;
@@ -625,14 +614,14 @@ function ProductPage() {
             {s.pickup && <li><Ic n="store" s={18} /> รับสินค้าได้ที่ {info.branch?.name}</li>}
           </ul>
           {p.description && <Acc title="รายละเอียดสินค้า" open><p className="pre">{p.description}</p></Acc>}
-          {p.sizeChart && <Acc title="ตารางไซส์"><SizeChartTable chart={p.sizeChart} /></Acc>}
+          {p.sizeChart && <Acc title={p.sizeChart.title || 'ตารางไซส์'}><SizeChartTable chart={p.sizeChart} highlight={v?.label} /></Acc>}
           {s.shippingInfo && <Acc title="การจัดส่ง"><p className="pre">{s.shippingInfo}</p></Acc>}
           {s.returnInfo && <Acc title="การคืนสินค้า"><p className="pre">{s.returnInfo}</p></Acc>}
         </div>
       </div>
       {p.related.length > 0 && <section className="st-sec"><div className="st-sec-head"><h2>สินค้าที่คุณอาจชอบ</h2></div><div className="st-rail">{p.related.map((x: any) => <Card key={x.id} p={x} />)}</div></section>}
       <div className="st-sticky only-sm"><Price price={price} compare={compare} /><button className="st-btn" disabled={!available} onClick={() => add(false)}>{p.hasSizes && !v ? 'เลือกไซส์' : 'เพิ่มลงตะกร้า'}</button></div>
-      {chart && p.sizeChart && <Modal title="ตารางไซส์" onClose={() => setChart(false)} width={640}><SizeChartTable chart={p.sizeChart} /></Modal>}
+      {chart && p.sizeChart && <SizeChartModal chart={p.sizeChart} highlight={v?.label} fallbackTitle={`${p.brandName ? p.brandName + ' ' : ''}ตารางเทียบขนาด`} onClose={() => setChart(false)} />}
     </div>
   );
 }

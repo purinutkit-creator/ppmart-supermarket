@@ -36,7 +36,11 @@ const productSchema = z.object({
   imageUrl: z.string().nullable().optional(),
   description: z.string().max(20000).nullable().optional(),
   online: z.boolean().optional().default(true),
-  sizeChart: z.object({ columns: z.array(z.string().max(60)).max(12), rows: z.array(z.array(z.string().max(60)).max(12)).max(60), note: z.string().max(500).optional().nullable() }).nullable().optional(),
+  sizeChart: z.object({
+    title: z.string().max(200).optional().nullable(),
+    layout: z.enum(['horizontal', 'vertical']).optional(), // horizontal: each row = one size system (US/UK/CM/EU…), sizes run left → right
+    columns: z.array(z.string().max(60)).max(40), rows: z.array(z.array(z.string().max(60)).max(40)).max(60), note: z.string().max(500).optional().nullable(),
+  }).nullable().optional(),
   barcodes: z.array(z.object({ barcode: z.string().min(1), packQty: z.number().positive().default(1), packPrice: money.nullable().optional() })).optional().default([]),
 });
 
