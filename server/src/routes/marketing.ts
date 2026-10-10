@@ -169,3 +169,26 @@ marketingRouter.get('/gift-cards/:code', requirePerm('pos.sell', 'coupons.manage
   if (!g) throw notFound('ไม่พบบัตรของขวัญ');
   res.json(g);
 });
+
+/**
+ * Optional AI image generation for promotion artwork. Proxies an OpenAI-compatible images endpoint
+ * (POST {model, prompt, size} -> {data:[{b64_json|url}]}) configured with AI_IMAGE_ENDPOINT / AI_IMAGE_API_KEY.
+ * Disabled (503) when not configured — the template-based poster generator works without it.
+ */
+marketingRouter.post('/ai-image', requirePerm('promotions.manage'), async (req, res) => {
+  const endpoint = process.env.AI_IMAGE_ENDPOINT;
+  const key = process.env.AI_IMAGE_API_KEY;
+  if (!endpoint || !key) throw new (await import('../util')).HttpError(503, 'ยังไม่ได้เชื่อมต่อบริการสร้างภาพด้วย AI (ตั้งค่า AI_IMAGE_ENDPOINT และ AI_IMAGE_API_KEY)', 'AI_NOT_CONFIGURED');
+  const b = parse(z.object({ prompt: z.string().min(3).max(1000) }), req.body);
+  const r = await fetch(endpoint, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+    body: JSON.stringify({ model: process.env.AI_IMAGE_MODEL || undefined, prompt: b.prompt, size: '1536x1024', n: 1 }),
+  });
+  const j: any = await r.json().catch(() => ({}));
+  if (!r.ok) throw new (await import('../util')).HttpError(502, 'AI image error: ' + (j?.error?.message || r.status), 'AI_ERROR');
+  const d = j?.data?.[0];
+  const image = d?.b64_json ? `data:image/png;base64,${d.b64_json}` : d?.url;
+  if (!image) throw bad('AI ไม่ส่งภาพกลับมา');
+  await audit({ staffId: req.staff!.id, staffName: req.staff!.name, action: 'marketing.ai_image', details: { prompt: b.prompt } });
+  res.json({ image });
+});

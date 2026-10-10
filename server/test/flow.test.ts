@@ -154,6 +154,23 @@ describe('end-to-end checkout', () => {
     expect(audit.rows[0].n).toBeGreaterThan(0);
   });
 
+  it('offline sync: duplicate-safe and tolerant of a reused bill number', async () => {
+    const key = uuid();
+    const payload = {
+      idempotencyKey: key, cartId: 'offline-cart', billNo: 'P01-000001', offline: true, clientCreatedAt: new Date().toISOString(),
+      lines: [{ lineId: 'a', productId: ids['DR-002'], qty: 2 }], payments: [{ method: 'cash', amount: 3400, received: 5000 }], expectedTotal: 3400,
+    };
+    const a = await env.api('POST', '/api/pos/checkout', payload, pos1);
+    expect(a.status).toBe(200);
+    expect(a.body.receipt.sale.billNo).toMatch(/^P01-000001-OFF/); // P01-000001 was already used online
+    const b = await env.api('POST', '/api/pos/checkout', payload, pos1);
+    expect(b.body.duplicate).toBe(true);
+    expect(b.body.receipt.sale.id).toBe(a.body.receipt.sale.id);
+    // coupons are never accepted offline (they need server validation)
+    const c = await env.api('POST', '/api/pos/checkout', { ...payload, idempotencyKey: uuid(), couponCodes: ['CPN-XXXXXXXX'] }, pos1);
+    expect(c.body.code).toBe('OFFLINE_COUPON');
+  });
+
   it('PIN lockout after repeated failures', async () => {
     for (let i = 0; i < 5; i++) await env.api('POST', '/api/auth/login', { employeeCode: '5001', pin: '0000' });
     const r = await env.api('POST', '/api/auth/login', { employeeCode: '5001', pin: '9753' });

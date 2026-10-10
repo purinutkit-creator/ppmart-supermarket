@@ -1,7 +1,7 @@
 // Atomic checkout: one DB transaction records the sale, payments, stock, points and coupons.
 import { z } from 'zod';
 import { pool, tx, one, type Db } from '../db';
-import { bad, conflict, forbidden } from '../util';
+import { bad, conflict, forbidden, randomCode } from '../util';
 import { authorizeOrApproval, can, type StaffCtx } from '../auth';
 import { getSetting } from '../settings';
 import { config } from '../config';
@@ -268,13 +268,21 @@ async function doCheckout(db: Db, staff: StaffCtx, input: CheckoutInput, ip?: st
     pointsEarned = Math.floor((Math.floor(total / ptsCfg.spendPerPoint)) * Number(tier?.point_multiplier ?? 1));
   }
 
+  // ---- bill number: an offline terminal may reuse a number already taken (e.g. a reinstalled browser).
+  // The customer already holds the printed receipt, so keep it recognisable and make it unique.
+  let billNo = input.billNo;
+  if (input.offline) {
+    const taken = await db.query('SELECT 1 FROM sales WHERE terminal_id=$1 AND bill_no=$2', [terminal.id, billNo]);
+    if (taken.rowCount) billNo = `${input.billNo}-OFF${randomCode(3)}`;
+  }
+
   // ---- insert sale ----
   const sale = (await db.query(
     `INSERT INTO sales (idempotency_key, bill_no, cart_id, terminal_id, branch_id, shift_id, staff_id, member_id, subtotal, discount_total,
        coupon_discount, points_discount, vat_amount, total, paid_total, change_amount, items_count, lines_count, points_earned, points_redeemed,
        offline, client_created_at)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22) RETURNING id`,
-    [input.idempotencyKey, input.billNo, input.cartId, terminal.id, branchId, shift?.id ?? null, staff.id, member?.id ?? null,
+    [input.idempotencyKey, billNo, input.cartId, terminal.id, branchId, shift?.id ?? null, staff.id, member?.id ?? null,
      priced.subtotal, priced.discountTotal + offlineAdjustment, priced.couponDiscount, priced.pointsDiscount, priced.vatAmount, total,
      total + change, change, priced.itemsCount, priced.lines.length, pointsEarned, input.redeemPoints,
      input.offline, input.clientCreatedAt ?? null])).rows[0];
@@ -341,8 +349,8 @@ async function doCheckout(db: Db, staff: StaffCtx, input: CheckoutInput, ip?: st
 
   // ---- member points / stats / tier ----
   if (member) {
-    if (input.redeemPoints > 0) await spendPoints(db, member.id, input.redeemPoints, 'redeem', saleId, `แลกคะแนนบิล ${input.billNo}`, staff.id);
-    if (pointsEarned > 0) await earnPoints(db, member.id, pointsEarned, saleId, `สะสมคะแนนบิล ${input.billNo}`, staff.id);
+    if (input.redeemPoints > 0) await spendPoints(db, member.id, input.redeemPoints, 'redeem', saleId, `แลกคะแนนบิล ${billNo}`, staff.id);
+    if (pointsEarned > 0) await earnPoints(db, member.id, pointsEarned, saleId, `สะสมคะแนนบิล ${billNo}`, staff.id);
     await db.query('UPDATE members SET total_spend = total_spend + $2, visit_count = visit_count + 1 WHERE id=$1', [member.id, total]);
     await recalcTier(db, member.id);
   }
@@ -357,9 +365,9 @@ async function doCheckout(db: Db, staff: StaffCtx, input: CheckoutInput, ip?: st
   if (input.manualDiscount?.value || overrideApprover || offlineAdjustment || input.offline) {
     await audit({
       staffId: staff.id, staffName: staff.name, action: input.offline ? 'sale.offline_sync' : 'sale.special', entity: 'sale', entityId: saleId,
-      billNo: input.billNo, approvedBy: manualApprover ?? overrideApprover, terminalId: terminal.id, branchId,
+      billNo, approvedBy: manualApprover ?? overrideApprover, terminalId: terminal.id, branchId,
       reason: input.manualDiscount?.reason ?? null, ip,
-      details: { manualDiscount: input.manualDiscount ?? null, offlineAdjustment, priceOverride: !!overrideApprover },
+      details: { manualDiscount: input.manualDiscount ?? null, offlineAdjustment, priceOverride: !!overrideApprover, printedBillNo: billNo !== input.billNo ? input.billNo : undefined },
     }, db);
   }
   return saleId;

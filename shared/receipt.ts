@@ -53,7 +53,7 @@ export const ELEMENT_LABELS: Record<ReceiptElementType, string> = {
 };
 
 export interface ReceiptData {
-  store: { name: string; logo?: string | null; address?: string; phone?: string; taxId?: string; currencySymbol?: string };
+  store: { name: string; logo?: string | null; address?: string; phone?: string; taxId?: string; currencySymbol?: string; timeZone?: string };
   branch: { name: string; address?: string | null; phone?: string | null; taxId?: string | null };
   terminal: { code: string; name: string };
   staff: { name: string; code?: string };
@@ -83,7 +83,7 @@ export function defaultTemplates(font = 'Sarabun'): { summary: ReceiptTemplate; 
     elements: [
       { id: id('s'), type: 'store_name', style: { fontSize: 14, fontWeight: 700, align: 'center' } },
       { id: id('s'), type: 'receipt_no', label: 'บิล #', style: { fontSize: 12, fontWeight: 700, align: 'center' } },
-      { id: id('s'), type: 'terminal', label: 'เครื่อง', style: { align: 'center' } },
+      { id: id('s'), type: 'terminal', label: 'เครื่อง ', style: { align: 'center' } },
       { id: id('s'), type: 'datetime', style: { align: 'center' } },
       { id: id('s'), type: 'divider' },
       { id: id('s'), type: 'item_count', label: 'สินค้า' },
