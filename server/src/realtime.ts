@@ -119,6 +119,17 @@ export function attachRealtime(server: Server) {
         for (const o of clients) if (o.kind === 'display' && o.terminalId === c.terminalId) send(o, { type: 'display.state', payload: state });
         return;
       }
+      // POS -> its paired customer displays: interactive prompts (member identify / self-register)
+      if (c.kind === 'staff' && msg.type === 'display.command' && c.terminalId) {
+        for (const o of clients) if (o.kind === 'display' && o.terminalId === c.terminalId) send(o, { type: 'display.command', payload: msg.payload });
+        return;
+      }
+      // customer display -> POS staff clients of the same terminal (never to other terminals)
+      if (c.kind === 'display' && msg.type === 'display.input' && c.terminalId) {
+        const payload = { ...msg.payload, displayId: c.displayId };
+        for (const o of clients) if (o.kind === 'staff' && o.terminalId === c.terminalId) send(o, { type: 'display.input', payload });
+        return;
+      }
       if (c.kind === 'display' && msg.type === 'display.lang' && c.terminalId) {
         pool.query('UPDATE displays SET lang=$2 WHERE id=$1', [c.displayId, String(msg.payload?.lang || 'th')]).catch(() => {});
         publish(terminalChannel(c.terminalId), 'display.lang', { displayId: c.displayId, lang: msg.payload?.lang });

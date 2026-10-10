@@ -150,15 +150,37 @@ posRouter.post('/coupons/release', async (req, res) => {
 });
 
 // ---------- members at the till ----------
+const MEMBER_TILL_SELECT = `SELECT m.id, m.member_no, m.first_name, m.last_name, m.phone, m.points, m.birthday, m.tier_id, m.created_at, t.name AS tier_name, t.discount_pct,
+     (m.password_hash IS NOT NULL) AS has_password
+   FROM members m LEFT JOIN tiers t ON t.id=m.tier_id`;
+const maskPhone = (m: any) => ({ ...m, phone: m.phone.replace(/^(\d{3})\d+(\d{3})$/, '$1-xxx-$2') });
+
 posRouter.get('/members/find', async (req, res) => {
   const term = String(req.query.q || '').trim();
   if (term.length < 3) return res.json([]);
   const rows = await q(
-    `SELECT m.id, m.member_no, m.first_name, m.last_name, m.phone, m.points, m.birthday, m.tier_id, t.name AS tier_name, t.discount_pct
-     FROM members m LEFT JOIN tiers t ON t.id=m.tier_id
-     WHERE m.is_active AND (m.member_no = upper($1) OR m.phone = $1 OR m.phone LIKE '%'||$1 OR (m.first_name||' '||coalesce(m.last_name,'')) ILIKE '%'||$1||'%') LIMIT 10`, [term]);
-  // mask phone numbers at the till
-  res.json(rows.map((m) => ({ ...m, phone: m.phone.replace(/^(\d{3})\d+(\d{3})$/, '$1-xxx-$2') })));
+    `${MEMBER_TILL_SELECT}
+     WHERE m.is_active AND (m.member_no = upper($1) OR m.phone = $1 OR m.phone LIKE '%'||$1 OR (m.first_name||' '||coalesce(m.last_name,'')) ILIKE '%'||$1||'%'
+       OR m.id = (SELECT member_id FROM member_cards c WHERE c.code=$1 AND c.status='active')) LIMIT 10`, [term]);
+  res.json(rows.map(maskPhone)); // phone numbers are masked at the till
+});
+
+/**
+ * Identify a member at the till by one of 4 methods:
+ *  phone (full number), card (printed card number), barcode (scanned card barcode), tap (RFID/NFC UID).
+ * Member-number barcodes (M#########) are accepted for barcode as well.
+ */
+posRouter.post('/members/identify', async (req, res) => {
+  const b = parse(z.object({ method: z.enum(['phone', 'card', 'barcode', 'tap']), value: z.string().min(3).max(64) }), req.body);
+  const v = b.value.trim();
+  let row: any;
+  if (b.method === 'phone') {
+    row = await one(`${MEMBER_TILL_SELECT} WHERE m.is_active AND m.phone=$1`, [v.replace(/\D/g, '')]);
+  } else {
+    row = await one(`${MEMBER_TILL_SELECT} WHERE m.is_active AND (m.id = (SELECT member_id FROM member_cards c WHERE c.code=$1 AND c.status='active') OR m.member_no = upper($1))`, [v]);
+  }
+  if (!row) throw notFound(b.method === 'phone' ? 'ไม่พบสมาชิกจากเบอร์โทรนี้' : 'ไม่พบบัตรสมาชิกนี้ (ยังไม่ได้ผูกบัตร?)');
+  res.json(maskPhone(row));
 });
 
 // ---------- customer display pairing ----------

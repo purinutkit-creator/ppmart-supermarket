@@ -15,7 +15,8 @@ import { Modal, errMsg, useToast, useWithApproval, Field, MoneyInput } from '../
 import { CameraScanner } from '../components/CameraScanner';
 import { DevicesPanel, usePrinterState, DEFAULT_PRINTER } from '../components/DevicesPanel';
 import { PaymentModal, type Tender } from './pos/PaymentModal';
-import { OpenShiftModal, ShiftModal, SalesModal, DisplayModal, MemberModal, WeightModal, CouponConfirm } from './pos/panels';
+import { OpenShiftModal, ShiftModal, SalesModal, DisplayModal, WeightModal, CouponConfirm } from './pos/panels';
+import { MemberModal, MemberDetailModal, DisplayRegisterConfirm, identifyMember } from './pos/member';
 
 interface CartLine {
   lineId: string; productId: number; name: string; qty: number; barcode?: string | null; packQty: number;
@@ -55,6 +56,8 @@ export default function Pos() {
   const [locked, setLocked] = useState(false);
   const [lastReceipt, setLastReceipt] = useState<any>(null);
   const [paidInfo, setPaidInfo] = useState<any>(null);
+  const [displayPrompt, setDisplayPrompt] = useState<'identify' | 'register' | null>(null);
+  const [registerReq, setRegisterReq] = useState<any>(null);
   const [displayPresence, setDisplayPresence] = useState<{ online: number; paired: number }>({ online: 0, paired: 0 });
   const inputRef = useRef<HTMLInputElement>(null);
   const terminal = catalog?.terminal;
@@ -123,6 +126,34 @@ export default function Pos() {
     ping();
     return () => { clearInterval(iv); window.removeEventListener('online', onl); window.removeEventListener('ppmart-outbox', ob); };
   }, [online]); // eslint-disable-line
+
+  // ---------------- customer self-service on the customer display ----------------
+  const attachMemberRef = useRef<(m: any) => void>(() => {});
+  attachMemberRef.current = (m: any) => { updateBill((b) => ({ ...b, member: m })); toast(`สมาชิก: ${m.first_name} (${m.tier_name ?? ''})`, 'ok'); };
+  const askDisplay = (mode: 'identify' | 'register' | null) => {
+    wsRef.current?.send('display.command', { type: mode ? `member.${mode}` : 'member.close' });
+    setDisplayPrompt(mode);
+  };
+  useEffect(() => {
+    const ws = wsRef.current;
+    if (!ws) return;
+    return ws.on('display.input', async (p) => {
+      if (p.kind === 'member.identify') {
+        try {
+          const m = await identifyMember(p.method, String(p.value));
+          attachMemberRef.current(m);
+          ws.send('display.command', { type: 'member.result', ok: true, name: m.first_name, tier: m.tier_name, points: m.points });
+          setDisplayPrompt(null);
+        } catch (e) {
+          ws.send('display.command', { type: 'member.result', ok: false, message: errMsg(e) });
+        }
+      } else if (p.kind === 'member.register') {
+        setRegisterReq(p.profile);
+      } else if (p.kind === 'member.cancel') {
+        setDisplayPrompt(null);
+      }
+    });
+  }, [wsOk]); // eslint-disable-line
 
   // ---------------- auto lock ----------------
   useEffect(() => {
@@ -272,6 +303,10 @@ export default function Pos() {
       try { const r = await api(`/api/pos/lookup/${encodeURIComponent(code)}`); return addProduct(r.product, { qty: mult, barcode: code, packQty: r.match.packQty, packPrice: r.match.packPrice, weightKg: r.match.weightKg, embeddedPrice: r.match.priceSatang }); }
       catch { /* fallthrough */ }
     }
+    // member card (RFID tap / card barcode / card number) scanned at the till
+    if (online) {
+      try { const mm = await identifyMember('tap', code); attachMemberRef.current(mm); return; } catch { /* not a member card */ }
+    }
     // name search fallback
     const term = code.toLowerCase();
     const found = (catalog?.products ?? []).filter((x: any) => x.name.toLowerCase().includes(term) || x.nameEn?.toLowerCase().includes(term));
@@ -417,7 +452,7 @@ export default function Pos() {
   // ---------------- keyboard shortcuts ----------------
   useEffect(() => {
     const k = (e: KeyboardEvent) => {
-      if (locked || modal || couponCheck || weighFor) return;
+      if (locked || modal || couponCheck || weighFor || registerReq) return;
       const map: Record<string, () => void> = {
         F1: () => setModal('help'), F2: () => setModal('search'), F3: () => setModal('member'), F4: () => { if (selLine) { const v = prompt('จำนวน', String(selLine.qty)); if (v) changeQty(selLine.lineId, Number(v)); } },
         F5: () => setModal('discount'), F6: () => { const c = prompt('รหัสคูปอง'); if (c) handleCoupon(c); }, F7: holdBill, F8: () => setModal('bills'),
@@ -518,8 +553,9 @@ export default function Pos() {
 
         <div className="pos-right">
           {bill.member ? (
-            <div className="member-pill"><div><b>{bill.member.first_name} {bill.member.last_name}</b> <span className="small">({bill.member.tier_name})</span><div className="xs">{bill.member.member_no} · {Number(bill.member.points).toLocaleString()} คะแนน · จะได้ +{pointsToEarn}</div></div><button className="btn sm ghost" onClick={() => updateBill((b) => ({ ...b, member: null, redeemPoints: 0 }))}>✕</button></div>
+            <div className="member-pill" style={{ cursor: 'pointer' }} title="ดูรายละเอียด / พิมพ์ / ผูกบัตร" onClick={() => setModal('memberDetail')}><div><b>{bill.member.first_name} {bill.member.last_name}</b> <span className="small">({bill.member.tier_name})</span><div className="xs">{bill.member.member_no} · {Number(bill.member.points).toLocaleString()} คะแนน · จะได้ +{pointsToEarn}</div></div><button className="btn sm ghost" onClick={(e) => { e.stopPropagation(); updateBill((b) => ({ ...b, member: null, redeemPoints: 0 })); }}>✕</button></div>
           ) : <button className="btn" onClick={() => setModal('member')}>👤 เพิ่มสมาชิก (F3)</button>}
+          {displayPrompt && !bill.member && <div className="banner info row between"><span>🖥️ รอลูกค้า{displayPrompt === 'register' ? 'สมัครสมาชิก' : 'ระบุสมาชิก'}ที่จอลูกค้า…</span><button className="btn sm" onClick={() => askDisplay(null)}>ยกเลิก</button></div>}
           {bill.coupons.map((c) => <div key={c.code} className="coupon-pill"><span>🎟 {c.code} — {c.rewardText}</span><button className="btn sm ghost" onClick={() => removeCoupon(c.code)}>✕</button></div>)}
           {priced?.couponResults.filter((r) => !r.ok).map((r) => <div key={r.code} className="banner warn small">คูปอง {r.code}: {r.reason}</div>)}
           <div className="totals">
@@ -567,7 +603,10 @@ export default function Pos() {
       )}
       {modal === 'search' && <SearchModal products={catalog.products} initial={input} onPick={(x) => { addProduct(x); setModal(null); setInput(''); }} onClose={() => setModal(null)} />}
       {modal === 'camera' && <CameraScanner onClose={() => setModal(null)} onScan={(c) => { setModal(null); handleCode(c); }} />}
-      {modal === 'member' && <MemberModal onClose={() => setModal(null)} onPick={(m) => { updateBill((b) => ({ ...b, member: m, coupons: b.coupons })); setModal(null); }} />}
+      {modal === 'member' && <MemberModal displayOnline={displayPresence.online > 0} onClose={() => setModal(null)} onCustomerDisplay={(mode) => { askDisplay(mode); setModal(null); }} onPick={(m) => { updateBill((b) => ({ ...b, member: m, coupons: b.coupons })); setModal(null); }} />}
+      {modal === 'memberDetail' && bill.member && <MemberDetailModal memberId={bill.member.id} onClose={() => setModal(null)} onRemove={() => { updateBill((b) => ({ ...b, member: null, redeemPoints: 0 })); setModal(null); }} />}
+      {registerReq && <DisplayRegisterConfirm profile={registerReq} onClose={() => { wsRef.current?.send('display.command', { type: 'member.result', ok: false, message: 'พนักงานไม่ได้ยืนยันการสมัคร' }); setRegisterReq(null); }}
+        onDone={(m) => { attachMemberRef.current(m); wsRef.current?.send('display.command', { type: 'member.result', ok: true, registered: true, name: m.first_name, memberNo: m.member_no }); setRegisterReq(null); setDisplayPrompt(null); }} />}
       {modal === 'display' && <DisplayModal onClose={() => setModal(null)} />}
       {modal === 'sales' && <SalesModal onClose={() => setModal(null)} />}
       {modal === 'openShift' && <OpenShiftModal onClose={() => setModal(null)} onOpened={(s) => { setShift(s); setModal(null); toast('เปิดกะแล้ว', 'ok'); }} />}

@@ -412,3 +412,63 @@ export async function renderReport(title: string, rows: { l: string; r?: string;
   o.putImageData(img, 0, 0);
   return out;
 }
+
+export interface MemberSlipData {
+  storeName: string;
+  name: string;
+  memberNo: string;
+  phone: string; // masked
+  tier?: string | null;
+  points?: number;
+  since?: string | null;
+  url: string; // member website (encoded in the QR)
+  showPasswordHint?: boolean;
+}
+
+/**
+ * Member details slip, 80 mm wide × 80 mm long, with a QR code that opens the member website.
+ * Rendered as a bitmap at printer DPI like every other receipt (Thai/English/Chinese fonts preserved).
+ */
+export async function renderMemberSlip(d: MemberSlipData, opts: { paperWidth: 58 | 80; dpi: number; fontFamily: string }) {
+  await ensureFonts([opts.fontFamily]);
+  const t: ReceiptTemplate = {
+    id: 'member-slip', name: 'Member slip', paperWidth: opts.paperWidth, dpi: opts.dpi, marginX: 3, feedLines: 2, cut: 'partial', threshold: 160,
+    defaultStyle: { fontFamily: opts.fontFamily, fontSize: 11, fontWeight: 400, lineHeight: 1.25, letterSpacing: 0, align: 'left' }, elements: [],
+  };
+  const width = paperDots(t.paperWidth, t.dpi);
+  const height = Math.round((80 / 25.4) * t.dpi); // 80 mm long
+  const m = Math.round((3 / 25.4) * t.dpi);
+  const c = document.createElement('canvas');
+  c.width = width; c.height = height;
+  const ctx = c.getContext('2d', { willReadFrequently: true })!;
+  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, width, height);
+  const base = t.defaultStyle;
+  const full = new Painter(ctx, t, m, width - m * 2);
+  full.y = 10;
+  full.text(d.storeName, { ...base, fontSize: 14, fontWeight: 800, align: 'center' });
+  full.text('บัตรสมาชิก / MEMBER', { ...base, fontSize: 12, fontWeight: 700, align: 'center', invert: true });
+  full.y += 12;
+  const top = full.y;
+  // right column: QR code
+  const qrSize = Math.round((width - m * 2) * 0.46);
+  const qr = document.createElement('canvas');
+  await QRCode.toCanvas(qr, d.url, { margin: 0, width: qrSize, errorCorrectionLevel: 'M', color: { dark: '#000000', light: '#ffffff' } });
+  ctx.drawImage(qr, width - m - qr.width, top);
+  // left column: member details
+  const left = new Painter(ctx, t, m, width - m * 2 - qr.width - 12);
+  left.y = top;
+  left.text(d.name, { ...base, fontSize: 13, fontWeight: 800 });
+  left.text(d.memberNo, { ...base, fontSize: 12, fontWeight: 700, letterSpacing: 1 });
+  if (d.tier) left.text(`ระดับ: ${d.tier}`, base);
+  if (d.points != null) left.text(`คะแนน: ${d.points.toLocaleString()}`, base);
+  left.text(`โทร: ${d.phone}`, base);
+  if (d.since) left.text(`สมัคร: ${new Date(d.since).toLocaleDateString('th-TH', { timeZone: 'Asia/Bangkok' })}`, base);
+  full.y = Math.max(left.y, top + qr.height) + 14;
+  full.text('สแกน QR เพื่อเข้าเว็บไซต์สมาชิก', { ...base, fontSize: 12, fontWeight: 800, align: 'center' });
+  if (d.showPasswordHint) full.text('รหัสผ่านครั้งแรก: เลข 4 ตัวท้ายเบอร์โทรศัพท์', { ...base, fontSize: 10, align: 'center' });
+  full.text(d.url.replace(/^https?:\/\//, ''), { ...base, fontSize: 8, align: 'center' });
+  const img = ctx.getImageData(0, 0, width, height);
+  for (let i = 0; i < img.data.length; i += 4) { const v = img.data[i] < 160 ? 0 : 255; img.data[i] = img.data[i + 1] = img.data[i + 2] = v; img.data[i + 3] = 255; }
+  ctx.putImageData(img, 0, 0);
+  return c;
+}

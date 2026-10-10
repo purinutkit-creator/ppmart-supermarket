@@ -5,6 +5,7 @@ import { fmtMoney, fmtQty } from '../lib/format';
 import { t, localName, type Lang } from '../lib/i18n';
 import { applyAreaFonts, loadFont } from '../lib/fonts';
 import { QrCanvas } from '../components/ui';
+import { IdentifyMethods, ProfileFields, emptyProfile, type RegisterProfile } from '../components/MemberForms';
 
 const KEY = 'ppmart.display';
 
@@ -19,6 +20,10 @@ export default function CustomerDisplay() {
   const wsRef = useRef<RealtimeClient | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const thanksTimer = useRef<any>(null);
+  const [memberUi, setMemberUi] = useState<null | { mode: 'identify' | 'register' | 'waiting' | 'result'; ok?: boolean; text?: string }>(null);
+  const [reg, setReg] = useState<RegisterProfile & { cardCode?: string }>(emptyProfile());
+  const [consent, setConsent] = useState(false);
+  const resultTimer = useRef<any>(null);
 
   // obtain a display identity + pairing code
   const requestPair = async () => {
@@ -52,6 +57,16 @@ export default function CustomerDisplay() {
       ws.on('_unauthorized', () => { localStorage.removeItem(KEY); setCred(null); requestPair(); }),
       ws.on('display.paired', () => { setCode(null); loadCfg(); }),
       ws.on('display.unpaired', () => { localStorage.removeItem(KEY); setCred(null); requestPair(); }),
+      ws.on('display.command', (c) => {
+        clearTimeout(resultTimer.current);
+        if (c.type === 'member.identify') setMemberUi({ mode: 'identify' });
+        else if (c.type === 'member.register') { setReg(emptyProfile()); setConsent(false); setMemberUi({ mode: 'register' }); }
+        else if (c.type === 'member.close') setMemberUi(null);
+        else if (c.type === 'member.result') {
+          setMemberUi({ mode: 'result', ok: c.ok, text: c.ok ? `${c.registered ? '🎉 ' : '👋 '}${c.name ?? ''}${c.memberNo ? ' · ' + c.memberNo : ''}` : c.message });
+          resultTimer.current = setTimeout(() => setMemberUi((u) => (u?.mode === 'result' && c.ok ? null : u)), 4000);
+        }
+      }),
       ws.on('display.state', (s) => {
         clearTimeout(thanksTimer.current);
         setState(s);
@@ -76,6 +91,34 @@ export default function CustomerDisplay() {
 
   const fullscreen = () => document.documentElement.requestFullscreen?.().catch(() => {});
   const L: Lang = lang ?? 'th';
+  const sendInput = (payload: any) => wsRef.current?.send('display.input', payload);
+  const overlay = memberUi && (
+    <div className="modal-bg" style={{ zIndex: 60 }}>
+      <div className="modal" style={{ width: 'min(820px, 100%)', fontSize: '1.1rem' }}>
+        <header><h2 style={{ margin: 0 }}>{memberUi.mode === 'register' ? t('register', L) : t('identifyTitle', L)}</h2>
+          {memberUi.mode !== 'waiting' && <button className="btn" onClick={() => { sendInput({ kind: 'member.cancel' }); setMemberUi(null); }}>{t('cancel', L)}</button>}</header>
+        <div className="body">
+          {memberUi.mode === 'identify' && <IdentifyMethods big lang={L} onSubmit={(method, value) => { sendInput({ kind: 'member.identify', method, value }); setMemberUi({ mode: 'waiting' }); }} />}
+          {memberUi.mode === 'register' && (
+            <div className="grid">
+              <ProfileFields big lang={L} v={reg} set={(p) => setReg({ ...reg, ...p })} />
+              <label className="check" style={{ fontSize: '1.1rem' }}><input type="checkbox" style={{ width: 24, height: 24 }} checked={consent} onChange={(e) => setConsent(e.target.checked)} /> {t('consent', L)}</label>
+              <button className="btn primary lg" style={{ fontSize: '1.4rem' }} disabled={!consent || !reg.firstName || reg.phone.length < 9}
+                onClick={() => { sendInput({ kind: 'member.register', profile: { ...reg, lang: L } }); setMemberUi({ mode: 'waiting' }); }}>{t('register', L)}</button>
+            </div>
+          )}
+          {memberUi.mode === 'waiting' && <div className="center" style={{ padding: '2rem', fontSize: '1.5rem' }}>⏳ {t('submitted', L)}</div>}
+          {memberUi.mode === 'result' && (
+            <div className="center grid" style={{ padding: '1.5rem' }}>
+              <div style={{ fontSize: '3rem' }}>{memberUi.ok ? '✅' : '⚠️'}</div>
+              <div style={{ fontSize: '1.8rem', fontWeight: 700 }}>{memberUi.text}</div>
+              {!memberUi.ok && <button className="btn lg" onClick={() => setMemberUi({ mode: 'identify' })}>{t('back', L)}</button>}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
   const head = { background: ds.primaryColor || '#0f766e' };
   const bodyBg = ds.background ? { backgroundImage: `url(${ds.background})`, backgroundSize: 'cover' } : { background: ds.bgColor || '#f1f5f9' };
 
@@ -116,6 +159,7 @@ export default function CustomerDisplay() {
 
   return (
     <div className="cd" style={bodyBg} onDoubleClick={fullscreen}>
+      {overlay}
       <div className="cd-head" style={head}>
         {cfg?.store?.logo && <img src={cfg.store.logo} />}
         <div style={{ fontSize: '1.7rem', fontWeight: 700 }}>{cfg?.store?.name}</div>

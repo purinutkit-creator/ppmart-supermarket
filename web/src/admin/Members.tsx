@@ -3,6 +3,8 @@ import { api } from '../lib/api';
 import { useApi, Modal, Field, MoneyInput, useToast, errMsg } from '../components/ui';
 import { fmtMoney, fmtDate } from '../lib/format';
 import { ExportBar } from '../components/ExportBar';
+import { ProfileFields, genderLabel } from '../components/MemberForms';
+import { printMemberSlip } from '../pages/pos/member';
 
 export default function Members() {
   const toast = useToast();
@@ -14,11 +16,12 @@ export default function Members() {
   const [detail, setDetail] = useState<any>(null);
   const [edit, setEdit] = useState<any>(null);
   const [tierEdit, setTierEdit] = useState<any>(null);
-  const open = async (id: number) => setDetail(await api(`/api/members/${id}`));
+  const [cards, setCards] = useState<any[]>([]);
+  const open = async (id: number) => { setDetail(await api(`/api/members/${id}`)); setCards(await api(`/api/members/${id}/cards`)); };
 
   return (
     <div className="grid" style={{ gap: '1rem' }}>
-      <div className="page-head"><h1>สมาชิกและสะสมคะแนน</h1><button className="btn primary" onClick={() => setEdit({ firstName: '', lastName: '', phone: '', email: '', birthday: '' })}>+ สมัครสมาชิก</button></div>
+      <div className="page-head"><h1>สมาชิกและสะสมคะแนน</h1><button className="btn primary" onClick={() => setEdit({ firstName: '', lastName: '', phone: '', email: '', birthday: '', gender: '', nationality: 'ไทย', country: 'Thailand', address: '' })}>+ สมัครสมาชิก</button></div>
       <div className="tabs">
         <button className={tab === 'list' ? 'on' : ''} onClick={() => setTab('list')}>สมาชิก</button>
         <button className={tab === 'tiers' ? 'on' : ''} onClick={() => setTab('tiers')}>ระดับสมาชิก (Tier)</button>
@@ -48,7 +51,7 @@ export default function Members() {
 
       {detail && (
         <Modal title={`${detail.first_name} ${detail.last_name ?? ''} — ${detail.member_no}`} onClose={() => setDetail(null)} width={860}
-          footer={<><button className="btn" onClick={() => { setEdit({ id: detail.id, firstName: detail.first_name, lastName: detail.last_name, phone: detail.phone, email: detail.email ?? '', birthday: detail.birthday ?? '', isActive: detail.is_active, tierId: detail.tier_id }); }}>แก้ไขข้อมูล</button>
+          footer={<><button className="btn" onClick={() => { setEdit({ id: detail.id, firstName: detail.first_name, lastName: detail.last_name, phone: detail.phone, email: detail.email ?? '', birthday: detail.birthday ?? '', isActive: detail.is_active, tierId: detail.tier_id, address: detail.address ?? '', gender: detail.gender ?? '', nationality: detail.nationality ?? '', country: detail.country ?? '' }); }}>แก้ไขข้อมูล</button>
             <button className="btn" onClick={async () => { const p = prompt('ปรับคะแนน (+/-)'); const r = p && prompt('เหตุผล'); if (p && r) { try { await api(`/api/members/${detail.id}/points`, { body: { points: Number(p), reason: r } }); open(detail.id); reload(); } catch (e) { toast(errMsg(e), 'err'); } } }}>ปรับคะแนน</button>
             <button className="btn" onClick={async () => { const v = prompt('มูลค่าคูปองสมาชิก (บาท)', '50'); if (!v) return; try { const c = await api(`/api/members/${detail.id}/coupons`, { body: { title: 'MEMBER COUPON', reward: { type: 'amount', value: Math.round(Number(v) * 100) }, minSpend: 0, validDays: 30 } }); toast('ออกคูปอง ' + c.code, 'ok'); open(detail.id); } catch (e) { toast(errMsg(e), 'err'); } }}>ออกคูปองสมาชิก</button></>}>
           <div className="grid g4">
@@ -57,7 +60,17 @@ export default function Members() {
             <div className="card kpi"><div className="l">ยอดซื้อสะสม</div><div className="v">{fmtMoney(Number(detail.total_spend))}</div></div>
             <div className="card kpi"><div className="l">จำนวนครั้ง</div><div className="v">{detail.visit_count}</div></div>
           </div>
-          <p className="small">โทร {detail.phone} · {detail.email} · วันเกิด {detail.birthday ?? '-'} · สมัคร {fmtDate(detail.created_at, false)}</p>
+          <p className="small">โทร {detail.phone} · {detail.email} · วันเกิด {detail.birthday ?? '-'} · เพศ {genderLabel(detail.gender)} · สัญชาติ {detail.nationality ?? '-'} · ประเทศ {detail.country ?? '-'} · สมัคร {fmtDate(detail.created_at, false)}</p>
+          {detail.address && <p className="small">ที่อยู่: {detail.address}</p>}
+          <div className="row small">
+            <span>รหัสผ่านเว็บไซต์: <b>{detail.has_password ? 'ตั้งเองแล้ว' : '4 ตัวท้ายเบอร์โทร (ยังไม่เปลี่ยน)'}</b></span>
+            <button className="btn sm" onClick={async () => { if (!confirm('รีเซ็ตรหัสผ่านเป็น 4 ตัวท้ายเบอร์โทร?')) return; await api(`/api/members/${detail.id}/reset-password`, { body: {} }); toast('รีเซ็ตแล้ว', 'ok'); open(detail.id); }}>รีเซ็ตรหัสผ่าน</button>
+            <button className="btn sm" onClick={() => printMemberSlip(detail).then(() => toast('ส่งพิมพ์แล้ว', 'ok')).catch((e) => toast(errMsg(e), 'err'))}>🖨️ พิมพ์รายละเอียดสมาชิก</button>
+          </div>
+          <div className="row small" style={{ marginTop: 6 }}>
+            <b>บัตรสมาชิก:</b> {cards.length ? cards.map((c) => <span key={c.code} className="badge">{c.kind} {c.kind === 'rfid' ? '••' + c.code.slice(-4) : c.code}<button className="btn sm ghost" onClick={async () => { await api(`/api/members/${detail.id}/cards/${encodeURIComponent(c.code)}`, { method: 'DELETE' }); open(detail.id); }}>✕</button></span>) : <span className="muted">ยังไม่มี</span>}
+            <button className="btn sm" onClick={async () => { const code = prompt('แตะบัตร / สแกน / พิมพ์เลขบัตร แล้วกด OK'); if (!code) return; try { await api(`/api/members/${detail.id}/cards`, { body: { code, kind: 'number' } }); open(detail.id); } catch (e) { toast(errMsg(e), 'err'); } }}>+ ผูกบัตร</button>
+          </div>
           <div className="grid g2">
             <div><h3>ประวัติการซื้อ</h3><table className="t"><tbody>{detail.sales.map((s: any) => <tr key={s.id}><td className="small">{fmtDate(s.created_at)}</td><td className="mono small">{s.bill_no}</td><td className="right">{fmtMoney(s.total)}</td><td className="small ok">+{s.points_earned}</td></tr>)}</tbody></table></div>
             <div><h3>ประวัติคะแนน</h3><table className="t"><tbody>{detail.ledger.map((l: any) => <tr key={l.id}><td className="small">{fmtDate(l.created_at)}</td><td className="small">{l.note}</td><td className={`right ${l.points > 0 ? 'ok' : 'err'}`}>{l.points}</td><td className="xs muted">{l.expires_at ? 'หมด ' + fmtDate(l.expires_at, false) : ''}</td></tr>)}</tbody></table>
@@ -66,13 +79,9 @@ export default function Members() {
         </Modal>
       )}
       {edit && (
-        <Modal title={edit.id ? 'แก้ไขสมาชิก' : 'สมัครสมาชิก'} onClose={() => setEdit(null)} footer={<button className="btn primary" onClick={async () => { try { if (edit.id) await api(`/api/members/${edit.id}`, { method: 'PUT', body: edit }); else await api('/api/members', { body: edit }); toast('บันทึกแล้ว', 'ok'); setEdit(null); reload(); if (detail) open(detail.id); } catch (e) { toast(errMsg(e), 'err'); } }}>บันทึก</button>}>
-          <div className="grid g2">
-            <Field label="ชื่อ"><input className="in" value={edit.firstName} onChange={(e) => setEdit({ ...edit, firstName: e.target.value })} /></Field>
-            <Field label="นามสกุล"><input className="in" value={edit.lastName ?? ''} onChange={(e) => setEdit({ ...edit, lastName: e.target.value })} /></Field>
-            <Field label="เบอร์โทร"><input className="in" value={edit.phone} onChange={(e) => setEdit({ ...edit, phone: e.target.value.replace(/\D/g, '') })} /></Field>
-            <Field label="อีเมล"><input className="in" value={edit.email ?? ''} onChange={(e) => setEdit({ ...edit, email: e.target.value })} /></Field>
-            <Field label="วันเกิด"><input className="in" type="date" value={edit.birthday ?? ''} onChange={(e) => setEdit({ ...edit, birthday: e.target.value })} /></Field>
+        <Modal title={edit.id ? 'แก้ไขสมาชิก' : 'สมัครสมาชิก'} width={680} onClose={() => setEdit(null)} footer={<button className="btn primary" onClick={async () => { const body = { ...edit, gender: edit.gender || null }; try { if (edit.id) await api(`/api/members/${edit.id}`, { method: 'PUT', body }); else await api('/api/members', { body }); toast('บันทึกแล้ว', 'ok'); setEdit(null); reload(); if (detail) open(detail.id); } catch (e) { toast(errMsg(e), 'err'); } }}>บันทึก</button>}>
+          <ProfileFields lang="th" v={edit} set={(p) => setEdit({ ...edit, ...p })} />
+          <div className="grid g2" style={{ marginTop: 8 }}>
             {edit.id && <Field label="Tier (กำหนดเอง)"><select className="in" value={edit.tierId ?? ''} onChange={(e) => setEdit({ ...edit, tierId: Number(e.target.value) })}>{tiers?.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</select></Field>}
             {edit.id && <label className="check"><input type="checkbox" checked={edit.isActive} onChange={(e) => setEdit({ ...edit, isActive: e.target.checked })} /> ใช้งาน</label>}
           </div>

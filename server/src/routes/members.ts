@@ -8,8 +8,11 @@ import { generateUniqueCoupon, couponEvent, couponPublic } from '../services/cou
 import { issueOtp, verifyOtp } from '../services/otp';
 import { audit } from '../audit';
 import { getAllSettings } from '../settings';
+import bcrypt from 'bcryptjs';
 
 const phoneRe = /^0\d{8,9}$/;
+/** Never send password hashes / lockout internals to staff clients. */
+const safeMember = ({ password_hash, failed_logins, locked_until, ...m }: any) => ({ ...m, has_password: password_hash != null });
 const memberSchema = z.object({
   firstName: z.string().min(1), lastName: z.string().optional().nullable(),
   phone: z.string().regex(phoneRe, 'เบอร์โทรศัพท์ไม่ถูกต้อง'),
@@ -18,16 +21,34 @@ const memberSchema = z.object({
   lang: z.enum(['th', 'en', 'zh']).optional(),
   tierId: z.number().nullable().optional(),
   isActive: z.boolean().optional(),
+  address: z.string().max(500).optional().nullable(),
+  gender: z.enum(['male', 'female', 'other', 'unspecified']).optional().nullable().or(z.literal('')),
+  nationality: z.string().max(80).optional().nullable(),
+  country: z.string().max(80).optional().nullable(),
 });
 
-async function createMember(db: Db, m: z.infer<typeof memberSchema>, branchId: number | null) {
+/** Extra profile fields asked after the first login (and on self-registration). */
+export const profileSchema = z.object({
+  address: z.string().max(500).optional().nullable(),
+  birthday: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().nullable().or(z.literal('')),
+  gender: z.enum(['male', 'female', 'other', 'unspecified']).optional().nullable().or(z.literal('')),
+  nationality: z.string().max(80).optional().nullable(),
+  country: z.string().max(80).optional().nullable(),
+  email: z.string().email().optional().nullable().or(z.literal('')),
+});
+
+export const MEMBER_PUBLIC_COLS = `m.id, m.member_no, m.first_name, m.last_name, m.phone, m.points, m.birthday, m.tier_id, m.created_at, m.address, m.gender, m.nationality, m.country`;
+
+export async function createMember(db: Db, m: z.infer<typeof memberSchema>, branchId: number | null) {
   const lowest = (await db.query('SELECT id FROM tiers ORDER BY rank LIMIT 1')).rows[0];
   for (let i = 0; i < 10; i++) {
     const no = 'M' + randomCode(9, '0123456789');
     const r = await db.query(
-      `INSERT INTO members (member_no, first_name, last_name, phone, email, birthday, tier_id, branch_id, lang) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+      `INSERT INTO members (member_no, first_name, last_name, phone, email, birthday, tier_id, branch_id, lang, address, gender, nationality, country)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
        ON CONFLICT (member_no) DO NOTHING RETURNING *`,
-      [no, m.firstName, m.lastName || null, m.phone, m.email || null, m.birthday || null, m.tierId ?? lowest?.id ?? null, branchId, m.lang ?? 'th']);
+      [no, m.firstName, m.lastName || null, m.phone, m.email || null, m.birthday || null, m.tierId ?? lowest?.id ?? null, branchId, m.lang ?? 'th',
+       m.address || null, m.gender || null, m.nationality || null, m.country || null]);
     if (r.rowCount) return r.rows[0];
   }
   throw new Error('member no generation failed');
@@ -41,7 +62,7 @@ membersRouter.get('/', requirePerm('members.manage', 'pos.sell'), async (req, re
   const term = String(req.query.q || '').trim();
   res.json(await q(`SELECT m.*, t.name AS tier_name, t.color AS tier_color FROM members m LEFT JOIN tiers t ON t.id=m.tier_id
     WHERE ($1 = '' OR m.member_no ILIKE '%'||$1||'%' OR m.phone LIKE '%'||$1||'%' OR (m.first_name||' '||coalesce(m.last_name,'')) ILIKE '%'||$1||'%' OR m.email ILIKE '%'||$1||'%')
-    ORDER BY m.created_at DESC LIMIT 300`, [term]));
+    ORDER BY m.created_at DESC LIMIT 300`, [term]).then((r) => r.map(safeMember)));
 });
 
 membersRouter.get('/tiers', async (_req, res) => res.json(await q('SELECT * FROM tiers ORDER BY rank')));
@@ -71,7 +92,7 @@ membersRouter.get('/:id', requirePerm('members.manage', 'pos.sell'), async (req,
   const sales = await q(`SELECT id, bill_no, total, status, created_at, points_earned, points_redeemed FROM sales WHERE member_id=$1 ORDER BY created_at DESC LIMIT 100`, [m.id]);
   const ledger = await q(`SELECT * FROM points_ledger WHERE member_id=$1 ORDER BY created_at DESC LIMIT 200`, [m.id]);
   const coupons = (await q(`SELECT * FROM coupons WHERE member_id=$1 ORDER BY issued_at DESC`, [m.id])).map(couponPublic);
-  res.json({ ...m, sales, ledger, coupons });
+  res.json({ ...safeMember(m), sales, ledger, coupons });
 });
 
 membersRouter.post('/', requirePerm('members.manage', 'pos.sell'), async (req, res) => {
@@ -81,13 +102,15 @@ membersRouter.post('/', requirePerm('members.manage', 'pos.sell'), async (req, r
   const branchId = req.staff!.terminalId ? (await one('SELECT branch_id FROM terminals WHERE id=$1', [req.staff!.terminalId]))?.branch_id : req.staff!.branchId;
   const m = await tx((db) => createMember(db, b, branchId ?? null));
   await audit({ staffId: req.staff!.id, staffName: req.staff!.name, action: 'member.create', entity: 'member', entityId: m.id });
-  res.json(m);
+  res.json(safeMember(m));
 });
 
 membersRouter.put('/:id', requirePerm('members.manage'), async (req, res) => {
   const b = parse(memberSchema, req.body);
-  await pool.query(`UPDATE members SET first_name=$1, last_name=$2, phone=$3, email=$4, birthday=$5, lang=COALESCE($6, lang), tier_id=COALESCE($7, tier_id), is_active=COALESCE($8, is_active) WHERE id=$9`,
-    [b.firstName, b.lastName || null, b.phone, b.email || null, b.birthday || null, b.lang ?? null, b.tierId ?? null, b.isActive ?? null, String(req.params.id)]);
+  await pool.query(`UPDATE members SET first_name=$1, last_name=$2, phone=$3, email=$4, birthday=$5, lang=COALESCE($6, lang), tier_id=COALESCE($7, tier_id), is_active=COALESCE($8, is_active),
+      address=$10, gender=$11, nationality=$12, country=$13 WHERE id=$9`,
+    [b.firstName, b.lastName || null, b.phone, b.email || null, b.birthday || null, b.lang ?? null, b.tierId ?? null, b.isActive ?? null, String(req.params.id),
+     b.address || null, b.gender || null, b.nationality || null, b.country || null]);
   await audit({ staffId: req.staff!.id, staffName: req.staff!.name, action: 'member.update', entity: 'member', entityId: String(req.params.id) });
   res.json({ ok: true });
 });
@@ -101,6 +124,37 @@ membersRouter.post('/:id/points', requirePerm('members.manage'), async (req, res
     await recalcTier(db, Number(String(req.params.id)));
     await audit({ staffId: req.staff!.id, staffName: req.staff!.name, action: 'member.points_adjust', entity: 'member', entityId: String(req.params.id), reason: b.reason, details: { points: b.points } }, db);
   });
+  res.json({ ok: true });
+});
+
+// ---- member cards (printed number / barcode / RFID-NFC UID) ----
+export async function linkCard(db: Db, memberId: number, code: string, kind: string, staffId: number) {
+  const c = code.trim();
+  if (c.length < 4) throw bad('เลขบัตรสั้นเกินไป');
+  const taken = (await db.query('SELECT member_id FROM member_cards WHERE code=$1', [c])).rows[0];
+  if (taken && taken.member_id !== memberId) throw bad('บัตรนี้ผูกกับสมาชิกคนอื่นอยู่แล้ว', 'CARD_TAKEN');
+  await db.query(`INSERT INTO member_cards (code, kind, member_id, linked_by) VALUES ($1,$2,$3,$4)
+    ON CONFLICT (code) DO UPDATE SET status='active', kind=EXCLUDED.kind, linked_by=EXCLUDED.linked_by, linked_at=now()`, [c, kind, memberId, staffId]);
+}
+membersRouter.get('/:id/cards', requirePerm('members.manage', 'pos.sell'), async (req, res) => {
+  res.json(await q('SELECT code, kind, status, linked_at FROM member_cards WHERE member_id=$1 ORDER BY linked_at', [String(req.params.id)]));
+});
+membersRouter.post('/:id/cards', requirePerm('members.manage', 'pos.sell'), async (req, res) => {
+  const b = parse(z.object({ code: z.string().min(4).max(64), kind: z.enum(['number', 'barcode', 'rfid']).default('number') }), req.body);
+  await linkCard(pool, Number(req.params.id), b.code, b.kind, req.staff!.id);
+  await audit({ staffId: req.staff!.id, staffName: req.staff!.name, action: 'member.card_link', entity: 'member', entityId: String(req.params.id), details: { kind: b.kind, code: b.code.slice(-4) } });
+  res.json({ ok: true });
+});
+membersRouter.delete('/:id/cards/:code', requirePerm('members.manage'), async (req, res) => {
+  await pool.query('DELETE FROM member_cards WHERE member_id=$1 AND code=$2', [String(req.params.id), String(req.params.code)]);
+  await audit({ staffId: req.staff!.id, staffName: req.staff!.name, action: 'member.card_unlink', entity: 'member', entityId: String(req.params.id) });
+  res.json({ ok: true });
+});
+/** Reset website password back to "last 4 digits of phone" (member must change it after login). */
+membersRouter.post('/:id/reset-password', requirePerm('members.manage', 'pos.sell'), async (req, res) => {
+  await pool.query('UPDATE members SET password_hash=NULL, password_changed_at=NULL, failed_logins=0, locked_until=NULL WHERE id=$1', [String(req.params.id)]);
+  await pool.query('DELETE FROM member_sessions WHERE member_id=$1', [String(req.params.id)]);
+  await audit({ staffId: req.staff!.id, staffName: req.staff!.name, action: 'member.password_reset', entity: 'member', entityId: String(req.params.id) });
   res.json({ ok: true });
 });
 
@@ -168,9 +222,58 @@ memberPortalRouter.post('/otp/verify', async (req, res) => {
     if (!m) throw bad('ไม่พบสมาชิก');
     memberId = m.id;
   }
+  res.json({ token: await newMemberSession(memberId), mustChangePassword: false });
+});
+
+async function newMemberSession(memberId: number) {
   const token = randomToken();
   await pool.query(`INSERT INTO member_sessions (token_hash, member_id, expires_at) VALUES ($1,$2, now() + interval '30 days')`, [sha256(token), memberId]);
-  res.json({ token });
+  return token;
+}
+
+const MAX_FAILS = 5, LOCK_MIN = 15;
+/**
+ * Password login (alternative to OTP). Identifier: phone, member number or member card number.
+ * Until the member sets a password, the initial password is the last 4 digits of their phone number;
+ * the site then asks them to change it. Accounts lock for 15 minutes after 5 failed attempts.
+ */
+memberPortalRouter.post('/login', async (req, res) => {
+  const b = parse(z.object({ identifier: z.string().min(3).max(64), password: z.string().min(4).max(100) }), req.body);
+  const id = b.identifier.trim();
+  const m = await one(`SELECT m.* FROM members m WHERE m.is_active AND (m.phone=$1 OR m.member_no=upper($1)
+      OR m.id = (SELECT member_id FROM member_cards c WHERE c.code=$1 AND c.status='active'))`, [id]);
+  const generic = () => new HttpError(401, 'ข้อมูลเข้าสู่ระบบไม่ถูกต้อง', 'INVALID_LOGIN');
+  if (!m) { await bcrypt.compare(b.password, '$2a$10$abcdefghijklmnopqrstuuJ2tY2bJ9yG2v4m2Q1rQ6sYH8xJm9cKa'); throw generic(); }
+  if (m.locked_until && new Date(m.locked_until) > new Date()) throw new HttpError(423, `เข้าสู่ระบบผิดหลายครั้ง กรุณาลองใหม่หลัง ${new Date(m.locked_until).toLocaleTimeString('th-TH', { timeZone: 'Asia/Bangkok' })}`, 'LOCKED');
+  const ok = m.password_hash ? await bcrypt.compare(b.password, m.password_hash) : b.password === String(m.phone).slice(-4);
+  if (!ok) {
+    const fails = m.failed_logins + 1;
+    const lock = fails >= MAX_FAILS;
+    await pool.query(`UPDATE members SET failed_logins=$2, locked_until=CASE WHEN $3 THEN now() + interval '${LOCK_MIN} minutes' ELSE locked_until END WHERE id=$1`, [m.id, lock ? 0 : fails, lock]);
+    if (lock) throw new HttpError(423, `เข้าสู่ระบบผิด ${MAX_FAILS} ครั้ง บัญชีถูกล็อก ${LOCK_MIN} นาที`, 'LOCKED');
+    throw generic();
+  }
+  await pool.query('UPDATE members SET failed_logins=0, locked_until=NULL WHERE id=$1', [m.id]);
+  res.json({ token: await newMemberSession(m.id), mustChangePassword: !m.password_hash });
+});
+
+memberPortalRouter.post('/password', requireMember, async (req, res) => {
+  const b = parse(z.object({ current: z.string().optional(), password: z.string().min(6, 'รหัสผ่านอย่างน้อย 6 ตัวอักษร').max(100) }), req.body);
+  const m = await one('SELECT phone, password_hash FROM members WHERE id=$1', [req.member!.id]);
+  if (m.password_hash && !(b.current && (await bcrypt.compare(b.current, m.password_hash)))) throw bad('รหัสผ่านปัจจุบันไม่ถูกต้อง', 'BAD_PASSWORD');
+  if (b.password === String(m.phone).slice(-4) || /^(\d)\1+$/.test(b.password) || /^(123456|654321|password)/i.test(b.password)) throw bad('รหัสผ่านนี้คาดเดาง่ายเกินไป', 'WEAK_PASSWORD');
+  await pool.query('UPDATE members SET password_hash=$2, password_changed_at=now() WHERE id=$1', [req.member!.id, await bcrypt.hash(b.password, 10)]);
+  // sign out other devices
+  const t = (req.headers.authorization || '').slice(7);
+  await pool.query('DELETE FROM member_sessions WHERE member_id=$1 AND token_hash<>$2', [req.member!.id, sha256(t)]);
+  res.json({ ok: true });
+});
+
+memberPortalRouter.put('/profile', requireMember, async (req, res) => {
+  const b = parse(profileSchema, req.body);
+  await pool.query(`UPDATE members SET address=$2, birthday=COALESCE($3::date, birthday), gender=$4, nationality=$5, country=$6, email=COALESCE($7, email), profile_completed_at=now() WHERE id=$1`,
+    [req.member!.id, b.address || null, b.birthday || null, b.gender || null, b.nationality || null, b.country || null, b.email || null]);
+  res.json({ ok: true });
 });
 
 memberPortalRouter.post('/logout', requireMember, async (req, res) => {
@@ -181,6 +284,7 @@ memberPortalRouter.post('/logout', requireMember, async (req, res) => {
 
 memberPortalRouter.get('/me', requireMember, async (req, res) => {
   const m = await one(`SELECT m.id, m.member_no, m.first_name, m.last_name, m.phone, m.email, m.birthday, m.points, m.total_spend, m.visit_count, m.created_at, m.lang,
+    m.address, m.gender, m.nationality, m.country, m.profile_completed_at, (m.password_hash IS NOT NULL) AS has_password,
     t.id AS tier_id, t.name AS tier_name, t.color AS tier_color, t.benefits AS tier_benefits, t.discount_pct, t.point_multiplier
     FROM members m LEFT JOIN tiers t ON t.id=m.tier_id WHERE m.id=$1`, [req.member!.id]);
   const nextTier = await one(`SELECT * FROM tiers WHERE rank > COALESCE((SELECT rank FROM tiers WHERE id=$1), -1) ORDER BY rank LIMIT 1`, [m.tier_id]);

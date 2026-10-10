@@ -214,38 +214,6 @@ export function DisplayModal({ onClose }: { onClose: () => void }) {
   );
 }
 
-// ---------------- Member ----------------
-export function MemberModal({ onPick, onClose }: { onPick: (m: any) => void; onClose: () => void }) {
-  const toast = useToast();
-  const [q, setQ] = useState('');
-  const [list, setList] = useState<any[]>([]);
-  const [reg, setReg] = useState(false);
-  const [form, setForm] = useState({ firstName: '', lastName: '', phone: '', email: '', birthday: '' });
-  const search = async () => { try { setList(await api(`/api/pos/members/find?q=${encodeURIComponent(q)}`)); } catch (e) { toast(errMsg(e), 'err'); } };
-  return (
-    <Modal title="👤 สมาชิก" onClose={onClose} width={560}>
-      <div className="tabs"><button className={!reg ? 'on' : ''} onClick={() => setReg(false)}>ค้นหา</button><button className={reg ? 'on' : ''} onClick={() => setReg(true)}>สมัครสมาชิกใหม่</button></div>
-      {!reg ? (
-        <div className="grid">
-          <div className="row"><input className="in" style={{ flex: 1 }} autoFocus placeholder="เบอร์โทร / เลขสมาชิก / ชื่อ (หรือสแกนบัตรสมาชิก)" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && search()} /><button className="btn primary" onClick={search}>ค้นหา</button></div>
-          <table className="t"><tbody>
-            {list.map((m) => <tr key={m.id} style={{ cursor: 'pointer' }} onClick={() => onPick(m)}><td><b>{m.first_name} {m.last_name}</b><div className="xs muted mono">{m.member_no} · {m.phone}</div></td><td>{m.tier_name}</td><td className="right">{m.points.toLocaleString()} pts</td></tr>)}
-          </tbody></table>
-        </div>
-      ) : (
-        <div className="grid g2">
-          <Field label="ชื่อ"><input className="in" value={form.firstName} onChange={(e) => setForm({ ...form, firstName: e.target.value })} /></Field>
-          <Field label="นามสกุล"><input className="in" value={form.lastName} onChange={(e) => setForm({ ...form, lastName: e.target.value })} /></Field>
-          <Field label="เบอร์โทร"><input className="in" inputMode="tel" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value.replace(/\D/g, '') })} /></Field>
-          <Field label="อีเมล"><input className="in" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></Field>
-          <Field label="วันเกิด"><input className="in" type="date" value={form.birthday} onChange={(e) => setForm({ ...form, birthday: e.target.value })} /></Field>
-          <div style={{ alignSelf: 'end' }}><button className="btn primary block" onClick={async () => { try { const m = await api('/api/members', { body: form }); toast('สมัครสมาชิกสำเร็จ ' + m.member_no, 'ok'); onPick({ ...m, tier_name: 'Bronze' }); } catch (e) { toast(errMsg(e), 'err'); } }}>สมัครและใช้กับบิลนี้</button></div>
-        </div>
-      )}
-    </Modal>
-  );
-}
-
 // ---------------- Weight entry for weighed goods ----------------
 export function WeightModal({ product, onDone, onClose }: { product: any; onDone: (kg: number) => void; onClose: () => void }) {
   const [txt, setTxt] = useState('');

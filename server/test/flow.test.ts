@@ -171,6 +171,48 @@ describe('end-to-end checkout', () => {
     expect(c.body.code).toBe('OFFLINE_COUPON');
   });
 
+  it('member: password login with last-4 initial password, change, card link and 4 identify methods', async () => {
+    const m = (await env.pool.query(`SELECT id, phone, member_no FROM members WHERE member_no='M100000001'`)).rows[0];
+    // initial password = last 4 digits of phone, must change afterwards
+    const bad = await env.api('POST', '/api/member/login', { identifier: m.phone, password: '0000' });
+    expect(bad.status).toBe(401);
+    const ok = await env.api('POST', '/api/member/login', { identifier: m.phone, password: m.phone.slice(-4) });
+    expect(ok.status).toBe(200);
+    expect(ok.body.mustChangePassword).toBe(true);
+    const tok = ok.body.token;
+    expect((await env.api('POST', '/api/member/password', { password: m.phone.slice(-4) + '00' }, tok)).status).toBe(200);
+    // old initial password no longer works, new one does (by member number too)
+    expect((await env.api('POST', '/api/member/login', { identifier: m.phone, password: m.phone.slice(-4) })).status).toBe(401);
+    const again = await env.api('POST', '/api/member/login', { identifier: m.member_no, password: m.phone.slice(-4) + '00' });
+    expect(again.body.mustChangePassword).toBe(false);
+    // extended profile
+    expect((await env.api('PUT', '/api/member/profile', { address: '1 ถนนสุขุมวิท', gender: 'female', nationality: 'ไทย', country: 'Thailand', birthday: '1990-05-01' }, again.body.token)).status).toBe(200);
+    const me = await env.api('GET', '/api/member/me', undefined, again.body.token);
+    expect(me.body.country).toBe('Thailand');
+
+    // cashier links an RFID card and a printed card number to the member
+    expect((await env.api('POST', `/api/members/${m.id}/cards`, { code: '0012345678', kind: 'rfid' }, pos1)).status).toBe(200);
+    expect((await env.api('POST', `/api/members/${m.id}/cards`, { code: 'PPC-000123', kind: 'number' }, pos1)).status).toBe(200);
+    const other = (await env.pool.query(`SELECT id FROM members WHERE member_no='M100000002'`)).rows[0];
+    expect((await env.api('POST', `/api/members/${other.id}/cards`, { code: '0012345678', kind: 'rfid' }, pos1)).body.code).toBe('CARD_TAKEN');
+    for (const [method, value] of [['phone', m.phone], ['card', 'PPC-000123'], ['barcode', m.member_no], ['tap', '0012345678']]) {
+      const r = await env.api('POST', '/api/pos/members/identify', { method, value }, pos1);
+      expect(r.status).toBe(200);
+      expect(r.body.id).toBe(m.id);
+      expect(r.body.phone).toContain('xxx');
+    }
+    expect((await env.api('POST', '/api/pos/members/identify', { method: 'tap', value: '9999999999' }, pos1)).status).toBe(404);
+    // card number also works for the website login
+    expect((await env.api('POST', '/api/member/login', { identifier: 'PPC-000123', password: m.phone.slice(-4) + '00' })).status).toBe(200);
+  });
+
+  it('member password lockout after 5 failures', async () => {
+    const m = (await env.pool.query(`SELECT phone FROM members WHERE member_no='M100000002'`)).rows[0];
+    for (let i = 0; i < 4; i++) expect((await env.api('POST', '/api/member/login', { identifier: m.phone, password: 'xxxx' })).status).toBe(401);
+    expect((await env.api('POST', '/api/member/login', { identifier: m.phone, password: 'xxxx' })).status).toBe(423);
+    expect((await env.api('POST', '/api/member/login', { identifier: m.phone, password: m.phone.slice(-4) })).status).toBe(423);
+  });
+
   it('PIN lockout after repeated failures', async () => {
     for (let i = 0; i < 5; i++) await env.api('POST', '/api/auth/login', { employeeCode: '5001', pin: '0000' });
     const r = await env.api('POST', '/api/auth/login', { employeeCode: '5001', pin: '9753' });
