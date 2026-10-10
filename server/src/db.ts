@@ -7,7 +7,10 @@ pg.types.setTypeParser(1700, (v) => Number(v));
 // DATE -> plain 'YYYY-MM-DD' string (avoid timezone shifts)
 pg.types.setTypeParser(1082, (v) => v);
 
-export const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL_OVERRIDE || config.databaseUrl, max: 20 });
+const connectionString = process.env.DATABASE_URL_OVERRIDE || config.databaseUrl;
+// Render's *external* database URLs (…render.com) require TLS; internal URLs and localhost do not.
+const needsSsl = process.env.PGSSL === 'true' || /\.render\.com/.test(connectionString);
+export const pool = new pg.Pool({ connectionString, max: 10, ssl: needsSsl ? { rejectUnauthorized: false } : undefined });
 
 export type Db = pg.Pool | pg.PoolClient;
 
