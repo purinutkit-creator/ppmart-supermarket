@@ -472,3 +472,102 @@ export async function renderMemberSlip(d: MemberSlipData, opts: { paperWidth: 58
   ctx.putImageData(img, 0, 0);
   return c;
 }
+
+// ---------------- Product barcode / price labels on the receipt printer ----------------
+export interface LabelOptions {
+  widthMm: number;
+  heightMm: number;
+  paperWidth: 58 | 80;
+  dpi: number;
+  fontFamily: string;
+  show: { store: boolean; name: boolean; price: boolean; memberPrice: boolean; barcode: boolean; barcodeText: boolean; sku: boolean; unit: boolean };
+  storeName?: string;
+}
+export interface LabelProduct { name: string; sku: string; price: number; memberPrice?: number | null; unitName?: string | null; isWeighted?: boolean; barcode: string }
+
+function barcodeFormat(code: string) {
+  if (/^\d{13}$/.test(code) && isGtin(code)) return 'EAN13';
+  if (/^\d{8}$/.test(code) && isGtin(code)) return 'EAN8';
+  if (/^\d{12}$/.test(code) && isGtin(code)) return 'UPC';
+  return 'CODE128';
+}
+function isGtin(code: string) {
+  let sum = 0;
+  for (let i = 0; i < code.length - 1; i++) sum += Number(code[code.length - 2 - i]) * (i % 2 === 0 ? 3 : 1);
+  return (10 - (sum % 10)) % 10 === Number(code[code.length - 1]);
+}
+
+/** Render one label as a 1-bit bitmap at the printer's resolution (label centred on the roll). */
+export async function renderProductLabel(p: LabelProduct, o: LabelOptions): Promise<HTMLCanvasElement> {
+  await ensureFonts([o.fontFamily]);
+  const dotsPerMm = o.dpi / 25.4;
+  const rollDots = paperDots(o.paperWidth, o.dpi);
+  const labelW = Math.min(rollDots, Math.round(o.widthMm * dotsPerMm));
+  const H = Math.max(80, Math.round(o.heightMm * dotsPerMm));
+  const c = document.createElement('canvas');
+  c.width = rollDots; c.height = H;
+  const ctx = c.getContext('2d', { willReadFrequently: true })!;
+  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, rollDots, H);
+  const pad = Math.round(1.5 * dotsPerMm);
+  const x0 = Math.round((rollDots - labelW) / 2) + pad;
+  const w = labelW - pad * 2;
+  const font = (px: number, weight = 400) => `${weight} ${Math.round(px)}px "${o.fontFamily}", "Sarabun", "Noto Sans SC", sans-serif`;
+  const scale = Math.min(1.6, Math.max(0.7, Math.min(w / 380, H / 300))); // font scale for the label size
+  const fit = (text: string, px: number, weight: number) => { // shrink until it fits on one line
+    let s = px;
+    ctx.font = font(s, weight);
+    while (s > 12 && ctx.measureText(text).width > w) { s -= 1; ctx.font = font(s, weight); }
+    return s;
+  };
+  let y = pad;
+  ctx.fillStyle = '#000'; ctx.textBaseline = 'top'; ctx.textAlign = 'center';
+  const cx = x0 + w / 2;
+  if (o.show.store && o.storeName) { const s = fit(o.storeName, 20 * scale, 600); ctx.fillText(o.storeName, cx, y); y += s * 1.45; }
+  if (o.show.name) {
+    const s = 26 * scale;
+    ctx.font = font(s, 700);
+    const lines = wrap(ctx, p.name, w).slice(0, H > 260 ? 3 : 2);
+    for (const ln of lines) { ctx.fillText(ln, cx, y); y += s * 1.15; }
+  }
+  // bottom-up: barcode block
+  let bottom = H - pad;
+  if (o.show.barcode && p.barcode) {
+    const textH = o.show.barcodeText ? Math.round(18 * scale) : 0;
+    const spaceAfterTop = bottom - y - (o.show.price ? 56 * scale : 0) - (o.show.memberPrice && p.memberPrice != null ? 26 * scale : 0) - (o.show.sku || o.show.unit ? 22 * scale : 0);
+    const bh = Math.max(30, Math.min(Math.round(110 * scale), spaceAfterTop - textH - 8));
+    const bc = document.createElement('canvas');
+    const fmt = barcodeFormat(p.barcode);
+    for (let module = 4; module >= 1; module--) {
+      JsBarcode(bc, p.barcode, { format: fmt, width: module, height: bh, displayValue: false, margin: 0, background: '#ffffff', lineColor: '#000000' });
+      if (bc.width <= w) break;
+    }
+    if (o.show.barcodeText) {
+      bottom -= textH;
+      ctx.font = font(textH * 0.95, 500);
+      ctx.fillText(p.barcode, cx, bottom);
+    }
+    bottom -= bh + 4;
+    ctx.drawImage(bc, Math.round(cx - Math.min(bc.width, w) / 2), bottom, Math.min(bc.width, w), bh);
+    bottom -= 6;
+  }
+  if (o.show.sku || o.show.unit) {
+    const t = [o.show.sku ? p.sku : '', o.show.unit && p.unitName ? `/${p.unitName}` : ''].filter(Boolean).join('  ');
+    const s = fit(t, 18 * scale, 400);
+    bottom -= s * 1.15;
+    ctx.fillText(t, cx, bottom);
+  }
+  // price block in the middle of the remaining space
+  const baht = (v: number) => (v / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const blocks: { text: string; px: number; weight: number }[] = [];
+  if (o.show.price) blocks.push({ text: `฿${baht(p.price)}${p.isWeighted ? '/กก.' : ''}`, px: 52 * scale, weight: 800 });
+  if (o.show.memberPrice && p.memberPrice != null) blocks.push({ text: `สมาชิก ฿${baht(p.memberPrice)}`, px: 22 * scale, weight: 600 });
+  const avail = bottom - y;
+  const need = blocks.reduce((a, b) => a + b.px * 1.15, 0);
+  let by = y + Math.max(0, (avail - need) / 2);
+  for (const b of blocks) { const s = fit(b.text, Math.min(b.px, Math.max(14, avail / Math.max(1, blocks.length) / 1.2)), b.weight); ctx.fillText(b.text, cx, by); by += s * 1.15; }
+  // binarise
+  const img = ctx.getImageData(0, 0, rollDots, H);
+  for (let i = 0; i < img.data.length; i += 4) { const v = img.data[i] < 160 ? 0 : 255; img.data[i] = img.data[i + 1] = img.data[i + 2] = v; img.data[i + 3] = 255; }
+  ctx.putImageData(img, 0, 0);
+  return c;
+}

@@ -39,7 +39,9 @@ const productSchema = z.object({
 const LIST_SQL = `
   SELECT p.*, u.name AS unit_name, c.name AS category_name, b.name AS brand_name,
     COALESCE((SELECT json_agg(json_build_object('barcode', pb.barcode, 'packQty', pb.pack_qty, 'packPrice', pb.pack_price)) FROM product_barcodes pb WHERE pb.product_id=p.id), '[]') AS barcodes,
-    (SELECT COALESCE(SUM(qty),0) FROM stock_levels sl WHERE sl.product_id=p.id AND ($1::int IS NULL OR sl.branch_id=$1)) AS stock
+    (SELECT COALESCE(SUM(qty),0) FROM stock_levels sl WHERE sl.product_id=p.id AND ($1::int IS NULL OR sl.branch_id=$1)) AS stock,
+    COALESCE((SELECT json_agg(json_build_object('branchId', b.id, 'branch', b.name, 'qty', COALESCE(sl.qty,0)) ORDER BY b.id)
+      FROM branches b LEFT JOIN stock_levels sl ON sl.branch_id=b.id AND sl.product_id=p.id WHERE b.is_active), '[]') AS branch_stock
   FROM products p LEFT JOIN units u ON u.id=p.unit_id LEFT JOIN categories c ON c.id=p.category_id LEFT JOIN brands b ON b.id=p.brand_id`;
 
 productsRouter.get('/', async (req, res) => {
@@ -48,7 +50,7 @@ productsRouter.get('/', async (req, res) => {
   const rows = await q(`${LIST_SQL} WHERE ($2 = '' OR p.name ILIKE '%'||$2||'%' OR p.sku ILIKE '%'||$2||'%' OR EXISTS (SELECT 1 FROM product_barcodes z WHERE z.product_id=p.id AND z.barcode LIKE $2||'%'))
     AND ($3::int IS NULL OR p.category_id=$3) ORDER BY p.name LIMIT 2000`, [branchId, term, req.query.categoryId ? Number(req.query.categoryId) : null]);
   const canCost = req.staff!.roleKey === 'owner' || req.staff!.permissions.includes('reports.cost') || req.staff!.permissions.includes('products.manage');
-  res.json(rows.map((r) => ({ ...productPublic(r), cost: canCost ? r.cost : undefined })));
+  res.json(rows.map((r) => ({ ...productPublic(r), cost: canCost ? r.cost : undefined, branchStock: r.branch_stock })));
 });
 
 productsRouter.get('/:id', async (req, res) => {

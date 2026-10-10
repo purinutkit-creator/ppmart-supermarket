@@ -13,6 +13,7 @@ import { priceCart, type PricingProduct, type PromotionDef, type CouponInput } f
 import { classifyBarcode, parseWeightedBarcode } from '../../../shared/barcode';
 import { Modal, errMsg, useToast, useWithApproval, Field, MoneyInput } from '../components/ui';
 import { CameraScanner } from '../components/CameraScanner';
+import { LabelPrint } from '../components/LabelPrint';
 import { DevicesPanel, usePrinterState, DEFAULT_PRINTER } from '../components/DevicesPanel';
 import { PaymentModal, type Tender } from './pos/PaymentModal';
 import { OpenShiftModal, ShiftModal, SalesModal, DisplayModal, WeightModal, CouponConfirm } from './pos/panels';
@@ -106,7 +107,11 @@ export default function Pos() {
       ws.on('_unauthorized', () => { setSession(null); nav('/login'); }),
       ws.on('presence', (pr) => setDisplayPresence((d) => ({ ...d, online: pr.displays?.length ?? 0 }))),
       ws.on('catalog.changed', () => { clearTimeout((window as any).__catT); (window as any).__catT = setTimeout(loadCatalog, 1500); }),
-      ws.on('stock.changed', () => { clearTimeout((window as any).__stT); (window as any).__stT = setTimeout(loadCatalog, 5000); }),
+      ws.on('stock.changed', (p) => {
+        const ids: number[] = p?.productIds ?? [];
+        if (ids.length && ids.length <= 200) refreshStock(ids).catch(() => {});
+        else { clearTimeout((window as any).__stT); (window as any).__stT = setTimeout(loadCatalog, 1000); }
+      }),
       ws.on('settings.changed', () => loadCatalog()),
     ];
     return () => { offs.forEach((f) => f()); ws.close(); };
@@ -217,7 +222,14 @@ export default function Pos() {
   useEffect(() => { if (!paidInfo && modal !== 'pay') pushDisplay(); }, [pushDisplay, paidInfo, modal]);
 
   // ---------------- cart ops ----------------
-  const addProduct = useCallback((pr: any, opts: { qty?: number; barcode?: string | null; packQty?: number; packPrice?: number | null; embeddedPrice?: number | null; weightKg?: number | null } = {}) => {
+  /** Pull live stock for some products from the server and patch the cached catalog. */
+  const refreshStock = useCallback(async (ids: number[]) => {
+    const fresh: Record<string, number | null> = await api(`/api/pos/stock?ids=${ids.join(',')}`);
+    setCatalog((c: any) => c && { ...c, products: c.products.map((x: any) => (x.id in fresh ? { ...x, stock: fresh[x.id] } : x)) });
+    return fresh;
+  }, []);
+
+  const addProduct = useCallback((pr: any, opts: { qty?: number; barcode?: string | null; packQty?: number; packPrice?: number | null; embeddedPrice?: number | null; weightKg?: number | null; freshStock?: boolean } = {}) => {
     if (pr.saleBlocked) { toast(`⛔ ห้ามจำหน่าย: ${pr.name}${pr.blockReason ? '\n' + pr.blockReason : ''}`, 'err'); return; }
     if (!pr.isActive) { toast(`สินค้าถูกปิดการขาย: ${pr.name}`, 'err'); return; }
     if (pr.isWeighted && opts.weightKg == null && opts.embeddedPrice == null) { setWeighFor({ product: pr, barcode: opts.barcode ?? '' }); return; }
@@ -225,7 +237,13 @@ export default function Pos() {
     const qty = opts.weightKg ?? opts.qty ?? 1;
     const inCart = bill.lines.filter((l) => l.productId === pr.id).reduce((a, l) => a + l.qty * l.packQty, 0);
     if (pr.trackStock && pr.stock != null && !settings?.pos?.allowNegativeStock && inCart + qty * packQty > Number(pr.stock)) {
-      toast(`⚠️ สินค้าหมดสต็อก/ไม่พอ: ${pr.name} (คงเหลือ ${fmtQty(Number(pr.stock))})`, 'err');
+      // The cached catalog may be stale (stock just received in the back office): re-check with the server before refusing.
+      if (online && !opts.freshStock) {
+        refreshStock([pr.id]).then((fresh) => addProduct({ ...pr, stock: fresh[pr.id] }, { ...opts, freshStock: true }))
+          .catch(() => toast(`⚠️ ตรวจสอบสต็อกไม่สำเร็จ: ${pr.name}`, 'err'));
+        return;
+      }
+      toast(`⚠️ สินค้าหมดสต็อก/ไม่พอ: ${pr.name} (คงเหลือที่สาขานี้ ${fmtQty(Number(pr.stock))})`, 'err');
       return;
     }
     const priceSource: CartLine['priceSource'] = opts.embeddedPrice != null ? 'embedded' : packQty !== 1 || opts.packPrice != null ? 'pack' : 'regular';
@@ -240,7 +258,7 @@ export default function Pos() {
       lastAdded.current = line.lineId; setSel(line.lineId);
       return { ...b, lines: [...b.lines, line] };
     });
-  }, [bill.lines, settings, toast, updateBill]);
+  }, [bill.lines, settings, toast, updateBill, online, refreshStock]);
 
   const handleCoupon = async (code: string) => {
     if (!online) { toast('ต้องออนไลน์เพื่อตรวจสอบคูปองกับเซิร์ฟเวอร์', 'err'); return; }
@@ -504,6 +522,7 @@ export default function Pos() {
         <span className="chip"><span className={`dot ${displayPresence.online ? 'on' : 'off'}`} />จอลูกค้า {displayPresence.online}</span>
         <span className="chip">{shift ? `กะ #${shift.shift.id}` : 'ยังไม่เปิดกะ'}</span>
         <span className="spacer" />
+        <button className="btn sm" onClick={() => setModal('labels')}>🏷️ ฉลาก</button>
         <button className="btn sm" onClick={() => setModal('devices')}>⚙️ อุปกรณ์</button>
         <button className="btn sm" onClick={() => setModal('display')}>🖥️ จอลูกค้า</button>
         <button className="btn sm" onClick={() => (shift ? setModal('shift') : setModal('openShift'))}>⏱ กะ</button>
@@ -640,8 +659,27 @@ export default function Pos() {
       {weighFor && <WeightModal product={weighFor.product} onClose={() => setWeighFor(null)} onDone={(kg) => { const pr = weighFor.product; setWeighFor(null); addProduct(pr, { weightKg: kg, barcode: weighFor.barcode || null }); }} />}
       {couponCheck && <CouponConfirm check={couponCheck} discount={couponCheck.discount} onClose={() => setCouponCheck(null)} onUse={useCoupon} />}
       {modal === 'outbox' && <OutboxModal onClose={() => setModal(null)} />}
+      {modal === 'labels' && <LabelModal products={catalog.products} onClose={() => setModal(null)} />}
       {locked && <LockScreen name={session.staff.name} onUnlock={() => setLocked(false)} onSwitch={logout} />}
     </div>
+  );
+}
+
+function LabelModal({ products, onClose }: { products: any[]; onClose: () => void }) {
+  const [q, setQ] = useState('');
+  const [picked, setPicked] = useState<any[]>([]);
+  const add = (p: any) => setPicked((l) => (l.some((x) => x.id === p.id) ? l : [...l, p]));
+  const found = q.trim().length >= 1 ? products.filter((p) => p.name.toLowerCase().includes(q.toLowerCase()) || p.sku.toLowerCase().includes(q.toLowerCase()) || p.barcodes.some((b: any) => b.barcode === q.trim())).slice(0, 8) : [];
+  return (
+    <Modal title="🏷️ พิมพ์ฉลากบาร์โค้ดสินค้า" onClose={onClose} width={1100}>
+      <div className="row" style={{ marginBottom: 8 }}>
+        <input className="in" style={{ flex: 1 }} autoFocus placeholder="สแกนบาร์โค้ด / พิมพ์ชื่อหรือ SKU แล้วกด Enter เพื่อเพิ่ม" value={q} onChange={(e) => setQ(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter' && found[0]) { add(found[0]); setQ(''); } }} />
+        {picked.length > 0 && <button className="btn" onClick={() => setPicked([])}>ล้างรายการ</button>}
+      </div>
+      {found.length > 0 && <div className="row" style={{ marginBottom: 8 }}>{found.map((p) => <button key={p.id} className="btn sm" onClick={() => { add(p); setQ(''); }}>+ {p.name}</button>)}</div>}
+      <LabelPrint products={picked} />
+    </Modal>
   );
 }
 

@@ -19,7 +19,7 @@ posRouter.use(requireStaff);
 const PRODUCT_SELECT = `
   SELECT p.*, u.name AS unit_name, c.name AS category_name, b.name AS brand_name,
     COALESCE((SELECT json_agg(json_build_object('barcode', pb.barcode, 'packQty', pb.pack_qty, 'packPrice', pb.pack_price)) FROM product_barcodes pb WHERE pb.product_id=p.id), '[]') AS barcodes,
-    (SELECT qty FROM stock_levels sl WHERE sl.product_id=p.id AND sl.branch_id=$1) AS stock
+    COALESCE((SELECT qty FROM stock_levels sl WHERE sl.product_id=p.id AND sl.branch_id=$1), 0) AS stock
   FROM products p LEFT JOIN units u ON u.id=p.unit_id LEFT JOIN categories c ON c.id=p.category_id LEFT JOIN brands b ON b.id=p.brand_id`;
 
 async function branchOf(terminalId: number | null, staffBranch: number | null) {
@@ -59,6 +59,14 @@ posRouter.get('/lookup/:code', async (req, res) => {
   }
   if (!row) throw notFound(`ไม่พบสินค้าบาร์โค้ด ${code}`);
   res.json({ product: productPublic(row), match });
+});
+
+/** Live stock at this terminal's branch: { [productId]: qty | null } */
+posRouter.get('/stock', async (req, res) => {
+  const ids = String(req.query.ids || '').split(',').map(Number).filter((n) => Number.isInteger(n) && n > 0).slice(0, 500);
+  const branchId = await branchOf(req.staff!.terminalId, req.staff!.branchId);
+  const rows = ids.length ? await q('SELECT p.id, sl.qty FROM products p LEFT JOIN stock_levels sl ON sl.product_id=p.id AND sl.branch_id=$1 WHERE p.id = ANY($2)', [branchId, ids]) : [];
+  res.json(Object.fromEntries(rows.map((r) => [r.id, r.qty ?? 0])));
 });
 
 posRouter.get('/search', async (req, res) => {

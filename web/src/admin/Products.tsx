@@ -4,6 +4,7 @@ import { useApi, Modal, Field, MoneyInput, useToast, errMsg, BarcodeSvg } from '
 import { fmtMoney, fmtQty, baht } from '../lib/format';
 import { readSheet, exportXLSX, exportCSV, type Col } from '../lib/export';
 import { gtinCheckDigit } from '../../../shared/barcode';
+import { LabelPrint } from '../components/LabelPrint';
 
 const empty = { sku: '', name: '', nameEn: '', nameZh: '', categoryId: null, brandId: null, unitId: null, price: 0, cost: 0, memberPrice: null, wholesalePrice: null, wholesaleMinQty: null, isWeighted: false, trackStock: true, vatExempt: false, isActive: true, saleBlocked: false, blockReason: '', minStock: 0, imageUrl: '', barcodes: [] as any[] };
 
@@ -68,7 +69,7 @@ export default function Products() {
             <select className="in" style={{ width: 200 }} value={catId} onChange={(e) => setCatId(e.target.value)}><option value="">ทุกหมวด</option>{cats?.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
           <div className="table-wrap">
             <table className="t">
-              <thead><tr><th><input type="checkbox" onChange={(e) => setSelected(e.target.checked ? new Set(list?.map((p) => p.id)) : new Set())} /></th><th>SKU</th><th>สินค้า</th><th>หมวด</th><th>บาร์โค้ด</th><th className="right">ราคา</th><th className="right">ราคาสมาชิก</th><th className="right">ต้นทุน</th><th className="right">สต็อก</th><th>สถานะ</th></tr></thead>
+              <thead><tr><th><input type="checkbox" onChange={(e) => setSelected(e.target.checked ? new Set(list?.map((p) => p.id)) : new Set())} /></th><th>SKU</th><th>สินค้า</th><th>หมวด</th><th>บาร์โค้ด</th><th className="right">ราคา</th><th className="right">ราคาสมาชิก</th><th className="right">ต้นทุน</th><th className="right">สต็อก (แยกสาขา)</th><th>สถานะ</th></tr></thead>
               <tbody>
                 {list?.map((p) => (
                   <tr key={p.id} style={{ cursor: 'pointer' }} onClick={() => setEdit({ ...p, barcodes: p.barcodes.map((b: any) => ({ ...b })) })}>
@@ -76,7 +77,7 @@ export default function Products() {
                     <td className="mono small">{p.sku}</td><td>{p.name}<div className="xs muted">{p.nameEn}</div></td><td className="small">{p.categoryName}</td>
                     <td className="xs mono">{p.barcodes.map((b: any) => `${b.barcode}${Number(b.packQty) !== 1 ? ` (×${b.packQty})` : ''}`).join(', ')}</td>
                     <td className="right num">{fmtMoney(p.price)}{p.isWeighted ? '/กก.' : ''}</td><td className="right num">{p.memberPrice != null ? fmtMoney(p.memberPrice) : '-'}</td><td className="right num">{p.cost != null ? fmtMoney(p.cost) : '•••'}</td>
-                    <td className={`right num ${p.trackStock && Number(p.stock) <= Number(p.minStock) ? 'err' : ''}`}>{p.trackStock ? fmtQty(Number(p.stock)) : '∞'}</td>
+                    <td className="right num small">{p.trackStock ? (p.branchStock ?? []).map((b: any) => <div key={b.branchId} className={Number(b.qty) <= Number(p.minStock) ? 'err' : ''}>{b.branch}: <b>{fmtQty(Number(b.qty))}</b></div>) : '∞'}</td>
                     <td>{!p.isActive ? <span className="badge">ปิด</span> : p.saleBlocked ? <span className="badge err">ห้ามขาย</span> : <span className="badge ok">ขาย</span>}</td>
                   </tr>
                 ))}
@@ -121,6 +122,7 @@ export default function Products() {
             <label className="check"><input type="checkbox" checked={edit.saleBlocked} onChange={(e) => setEdit({ ...edit, saleBlocked: e.target.checked })} /> ห้ามจำหน่าย</label>
             {edit.saleBlocked && <input className="in" style={{ width: 260 }} placeholder="เหตุผลที่ห้ามจำหน่าย" value={edit.blockReason ?? ''} onChange={(e) => setEdit({ ...edit, blockReason: e.target.value })} />}
           </div>
+          {edit.id && edit.trackStock && <ReceiveStock product={edit} branches={branches ?? []} onDone={reload} />}
           <h3>บาร์โค้ด (หลายบาร์โค้ดต่อสินค้า / แพ็ก)</h3>
           <table className="t"><thead><tr><th>บาร์โค้ด (EAN-13/EAN-8/UPC/Code128)</th><th>จำนวนต่อแพ็ก</th><th>ราคาแพ็ก</th><th></th></tr></thead><tbody>
             {edit.barcodes.map((b: any, i: number) => (
@@ -170,6 +172,17 @@ function MetaList({ title, path, rows, reload, extra = [] }: { title: string; pa
 }
 
 function Labels({ products }: { products: any[] }) {
+  const [mode, setMode] = useState<'thermal' | 'sheet'>('thermal');
+  if (!products.length) return <div className="card muted">เลือกสินค้าจากแท็บ “รายการสินค้า” ก่อน (ติ๊กช่องหน้าสินค้า)</div>;
+  return (
+    <div className="grid">
+      <div className="row"><button className={`btn sm ${mode === 'thermal' ? 'primary' : ''}`} onClick={() => setMode('thermal')}>🧾 พิมพ์ด้วยเครื่องพิมพ์ใบเสร็จ (USB/Bluetooth)</button><button className={`btn sm ${mode === 'sheet' ? 'primary' : ''}`} onClick={() => setMode('sheet')}>📄 พิมพ์บนกระดาษ A4 (เครื่องพิมพ์ทั่วไป)</button></div>
+      {mode === 'thermal' ? <LabelPrint products={products} /> : <SheetLabels products={products} />}
+    </div>
+  );
+}
+
+function SheetLabels({ products }: { products: any[] }) {
   const [copies, setCopies] = useState(1);
   const [kind, setKind] = useState<'price' | 'barcode'>('price');
   const items = useMemo(() => products.flatMap((p) => Array.from({ length: copies }, () => p)), [products, copies]);
@@ -193,6 +206,40 @@ function Labels({ products }: { products: any[] }) {
             </div>
           );
         })}
+      </div>
+    </div>
+  );
+}
+
+/** Quick stock receive / adjust for one product at an explicitly chosen branch (POS sells from its own branch's stock). */
+function ReceiveStock({ product, branches, onDone }: { product: any; branches: any[]; onDone: () => void }) {
+  const toast = useToast();
+  const [branchId, setBranchId] = useState<number | null>(null);
+  const [qty, setQty] = useState('');
+  const [lotNo, setLotNo] = useState('');
+  const [expiry, setExpiry] = useState('');
+  const [stock, setStock] = useState<any[]>(product.branchStock ?? []);
+  const bid = branchId ?? branches[0]?.id;
+  const submit = async () => {
+    const n = Number(qty);
+    if (!n) return;
+    try {
+      await api('/api/stock/adjust', { body: { branchId: bid, productId: product.id, qty: n, reason: n > 0 ? 'รับสินค้าเข้าสต็อก' : 'ปรับลดสต็อก', lotNo: lotNo || undefined, expiryDate: expiry || undefined } });
+      const fresh = await api(`/api/products?q=${encodeURIComponent(product.sku)}`);
+      setStock(fresh.find((x: any) => x.id === product.id)?.branchStock ?? stock);
+      toast(`ปรับสต็อก ${n > 0 ? '+' : ''}${n} ที่ ${branches.find((b) => b.id === bid)?.name} แล้ว`, 'ok');
+      setQty(''); setLotNo(''); setExpiry(''); onDone();
+    } catch (e) { toast(errMsg(e), 'err'); }
+  };
+  return (
+    <div className="card" style={{ background: '#f0fdf4', margin: '10px 0' }}>
+      <div className="row between"><b>📦 สต็อก</b><span className="small">{stock.map((b: any) => `${b.branch}: ${fmtQty(Number(b.qty))}`).join(' · ')}</span></div>
+      <div className="row" style={{ alignItems: 'flex-end', marginTop: 6 }}>
+        <Field label="สาขา"><select className="in" value={bid ?? ''} onChange={(e) => setBranchId(Number(e.target.value))}>{branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}</select></Field>
+        <Field label="จำนวน (+รับเข้า / −ลด)"><input className="in" type="number" style={{ width: 120 }} value={qty} onChange={(e) => setQty(e.target.value)} /></Field>
+        <Field label="เลขล็อต"><input className="in" style={{ width: 120 }} value={lotNo} onChange={(e) => setLotNo(e.target.value)} /></Field>
+        <Field label="วันหมดอายุ"><input className="in" type="date" value={expiry} onChange={(e) => setExpiry(e.target.value)} /></Field>
+        <button className="btn primary" disabled={!Number(qty)} onClick={submit}>บันทึกสต็อก</button>
       </div>
     </div>
   );
